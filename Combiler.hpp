@@ -6,6 +6,7 @@
 #include <vector>
 #include <array>
 #include <sstream>
+#include "zlib.h"
 
 template <class ...Fs>
 struct overload : Fs... {
@@ -1363,6 +1364,66 @@ struct Entity {
   }
 };
 
+std::string encode64(const std::string& data)
+{
+  uint32_t bits = 0;
+  uint32_t countOfBitsUsed = 0;
+
+  std::string result = "0";
+  const std::array<const char, 64> base64Chars =
+  {
+    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P',
+    'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f',
+    'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v',
+    'w', 'x', 'y', 'z', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '+', '/'
+  };
+  for (uint8_t c : data)
+  {
+    bits = (bits << 8) | c;
+    countOfBitsUsed += 8;
+
+    if (countOfBitsUsed >= 12)
+    {
+      result.append(1, base64Chars[bits >> (countOfBitsUsed -= 6)]);
+      bits &= (1 << countOfBitsUsed) - 1;
+      result.append(1, base64Chars[bits >> (countOfBitsUsed -= 6)]);
+      bits &= (1 << countOfBitsUsed) - 1;
+    }
+    else if (countOfBitsUsed >= 6)
+    {
+      result.append(1, base64Chars[bits >> (countOfBitsUsed -= 6)]);
+      bits &= (1 << countOfBitsUsed) - 1;
+    }
+  }
+  if (countOfBitsUsed != 0)
+  {
+    result.append(1, base64Chars[(bits << 6) >> countOfBitsUsed]);
+    result.append(3 - countOfBitsUsed / 2, '=');
+  }
+  return result;
+}
+
+std::string compress(const std::string& data)
+{
+  auto requiredSize = compressBound(static_cast<uLong>(data.size()));
+  std::string result;
+  result.resize(requiredSize);
+
+  auto code = compress2(reinterpret_cast<Bytef*>(&result[0]), &requiredSize, reinterpret_cast<const Bytef*>(data.data()), static_cast<uLong>(data.size()), 9);
+  switch (code)
+  {
+  case Z_OK: break;
+  case Z_MEM_ERROR: throw std::runtime_error("Compression failed: not enough memory.");
+  case Z_BUF_ERROR: throw std::runtime_error("Compression failed: not enough room in the output buffer.");
+  case Z_STREAM_ERROR: throw std::runtime_error("Invalid compression level: 9.");
+  default:
+    throw std::runtime_error("Compression failed: unknown error.");
+  }
+
+  result.resize(requiredSize);
+  return result;
+}
+
 std::string stringify(std::vector<Entity>& ents)
 {
   std::ostringstream output;
@@ -1370,7 +1431,7 @@ std::string stringify(std::vector<Entity>& ents)
   for (size_t i = 0; i < ents.size(); i++)
   {
     Entity& e = ents[i];
-    output << "{\"entity_number\":" << (i + 1) << ",\"position\":{\"x\":" << std::get<0>(e.position) << ",\"y\":" << std::get<1>(e.position) << "},";
+    output << "{\"entity_number\":" << (i + 1) << ",\"position\":{\"x\":" << std::get<0>(e.position) << ",\"y\":" << -std::get<1>(e.position) << "},";
     if (e.direction != 0)
       output << "\"direction\":" << e.direction << ",";
     output << "\"name\":\"";
@@ -1502,7 +1563,7 @@ std::string stringify(std::vector<Entity>& ents)
       output << "}}";
   }
   output << "],\"item\":\"blueprint\",\"version\":73018245120}}";
-  return output.str();
+  return encode64(compress(output.str()));
 }
 size_t poleAt(uint64_t const& x, uint64_t const& y, std::vector<Entity>& entities, std::vector<std::vector<size_t>>& xyToPole)
 {
@@ -1642,7 +1703,6 @@ std::string compile()
         current = x;
       }
   }
-
 
   return stringify(entities);
 }
