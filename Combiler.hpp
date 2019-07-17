@@ -4,7 +4,8 @@
 #include <variant>
 #include <optional>
 #include <vector>
-#include <type_traits>
+#include <array>
+#include <sstream>
 
 template <class ...Fs>
 struct overload : Fs... {
@@ -14,46 +15,133 @@ struct overload : Fs... {
   using Fs::operator()...;
 };
 
+enum class color
+{
+  // red
+  r,
+  // green
+  g,
+  // red & green
+  rg
+};
+
+template <color c>
+struct connector
+{
+  size_t source;
+  explicit connector(size_t n) : source(n) {}
+
+  bool operator==(connector const& o) const;
+  bool operator!=(connector const& o) const;
+};
+template<>
+struct connector<color::rg>
+{
+  connector<color::r> r;
+  connector<color::g> g;
+  connector(connector<color::r> const& r, connector<color::g> const& g) : r(r), g(g) {}
+
+  bool operator==(connector const& o) const { return this->r == o.r && this->g == o.g; }
+  bool operator!=(connector const& o) const { return this->r != o.r || this->g != o.g; }
+};
+
+
+template <color c>
+struct wire
+{
+  connector<c> source;
+  wire(connector<c> const& s);
+  static wire loop();
+
+  bool operator==(wire const& o) const { return this->source == o.source; }
+  bool operator!=(wire const& o) const { return this->source != o.source; }
+};
+template<>
+struct wire<color::rg>
+{
+  wire<color::r> r;
+  wire<color::g> g;
+  wire(wire<color::r> const& r, wire<color::g> const& g) : r(r), g(g) {}
+  wire(connector<color::rg> const& p) : r(p.r), g(p.g) {}
+  static wire loop() { return wire(wire<color::r>::loop(), wire<color::g>::loop()); }
+
+  bool operator==(wire const& o) const { return this->r == o.r && this->g == o.g; }
+  bool operator!=(wire const& o) const { return this->r != o.r || this->g != o.g; }
+};
+wire<color::rg> operator+(wire<color::r> const& r, wire<color::g> const& g) { return wire<color::rg>(r, g); }
+wire<color::rg> operator+(wire<color::g> const& g, wire<color::r> const& r) { return wire<color::rg>(r, g); }
 
 struct Any
 {
   bool operator==(Any const&) const { return true; }
   bool operator!=(Any const&) const { return false; }
+  void toString(std::ostringstream& output) const
+  {
+    output << "\"type\":\"virtual\",\"name\":\"signal-anything\"";
+  }
 };
 struct All
 {
   bool operator==(All const&) const { return true; }
   bool operator!=(All const&) const { return false; }
+  void toString(std::ostringstream& output) const
+  {
+    output << "\"type\":\"virtual\",\"name\":\"signal-everything\"";
+  }
 };
 struct Each
 {
   bool operator==(Each const&) const { return true; }
   bool operator!=(Each const&) const { return false; }
+  void toString(std::ostringstream& output) const
+  {
+    output << "\"type\":\"virtual\",\"name\":\"signal-each\"";
+  }
 };
-
 struct signal
 {
+  struct WithValue;
   struct Description;
-  Description const* const description;
+  Description const * description;
 
-  explicit signal(Description const* const& desc) : description(desc) {}
+  explicit signal(Description const * desc) : description(desc) {}
+  WithValue operator=(int32_t const& value) const;
+
+  void toString(std::ostringstream& output) const;
 };
+struct signal::WithValue
+{
+  signal sig;
+  int32_t value;
+  void toString(std::ostringstream& output) const
+  {
+    output << "\"signal\":{";
+    sig.toString(output);
+    output << "},\"count\":" << value;
+  }
+};
+signal::WithValue signal::operator=(int32_t const& value) const { return signal::WithValue{ *this, value }; }
 struct signal::Description
 {
   std::string codeSyntax;
   std::string gameSyntax;
   std::string type;
-  int index;
+  size_t index;
 
-  Description(std::string const& codeSyntax, std::string const& gameSyntax, std::string const& type, int index)
+  Description(std::string const& codeSyntax, std::string const& gameSyntax, std::string const& type, size_t index)
     : codeSyntax(codeSyntax), gameSyntax(gameSyntax), type(type), index(index) {}
 };
 
-constexpr Any any;
-constexpr All all;
-constexpr Each each;
+void signal::toString(std::ostringstream& output) const
+{
+  output << "\"type\":\"" << description->type << "\",\"name\":\"" << description->gameSyntax << "\"";
+}
 
-struct deciCom
+#define any Any()
+#define all All()
+#define each Each()
+
+struct deciComData
 {
   struct Mode
   {
@@ -63,15 +151,15 @@ struct deciCom
     enum class Enum;
 
     static std::vector<Mode> const modes;
-    static std::vector<Mode> createModes();
-    Description const * const description;
+    //static std::vector<Mode> createModes();
+    Description const * description;
 
-    Mode(Description const * const& desc) : description(desc) { }
+    Mode(Description const * desc) : description(desc) { }
   };
   struct Input
   {
     using Left = std::variant<Any, All, Each, signal>;
-    using Right = std::variant<int, signal>;
+    using Right = std::variant<int32_t, signal>;
 
     Left left;
     Right right;
@@ -85,7 +173,7 @@ struct deciCom
       Right right;
       Mode mode;
 
-      SignalType(signal const& signal, Right const& right, Mode const& mode) : left(left), right(right), mode(mode) {}
+      SignalType(signal const& signal, Right const& right, Mode const& mode) : left(signal), right(right), mode(mode) {}
       explicit operator Input() const;
 
       struct Boolable;
@@ -98,7 +186,7 @@ struct deciCom
   struct Output
   {
     using Type = std::variant<All, Each, signal>;
-    using Value = std::optional<int>;
+    using Value = std::optional<int32_t>;
 
     Type output;
     Value value;
@@ -114,7 +202,7 @@ struct deciCom
   Output::Type output;
   Output::Value value;
 
-  deciCom(Input::Left const& left, Input::Right const& right, Mode const& mode, Output::Type output, Output::Value value)
+  deciComData(Input::Left const& left, Input::Right const& right, Mode const& mode, Output::Type const& output, Output::Value const& value)
     : left(left), right(right), mode(mode), output(output), value(value) 
   {
     assert(!std::holds_alternative<Each>(output) || std::holds_alternative<Each>(left));
@@ -122,17 +210,17 @@ struct deciCom
   }
 };
 
-struct deciCom::Mode::Description
+struct deciComData::Mode::Description
 {
   std::string name;
   std::string codeSyntax;
   std::string gameSyntax;
-  int index;
+  size_t index;
 
-  Description(std::string const& name, std::string const& codeSyntax, std::string const& gameSyntax, int index)
-    : name(name), codeSyntax(codeSyntax), gameSyntax(gameSyntax) {}
+  Description(std::string const& name, std::string const& codeSyntax, std::string const& gameSyntax, size_t index)
+    : name(name), codeSyntax(codeSyntax), gameSyntax(gameSyntax), index(index) {}
 };
-struct deciCom::Input::Boolable : deciCom::Input
+struct deciComData::Input::Boolable : deciComData::Input
 {
   Boolable(Left const& left, Right const& right, Mode const& mode) : Input(left, right, mode) {}
   operator bool() const 
@@ -142,8 +230,8 @@ struct deciCom::Input::Boolable : deciCom::Input
         && std::get<signal>(left).description == std::get<signal>(right).description; 
   }
 };
-deciCom::Input::SignalType::operator deciCom::Input() const { return Input(left, right, mode); }
-struct deciCom::Input::SignalType::Boolable : deciCom::Input::SignalType
+deciComData::Input::SignalType::operator deciComData::Input() const { return Input(left, right, mode); }
+struct deciComData::Input::SignalType::Boolable : deciComData::Input::SignalType
 {
   Boolable(signal const& left, Right const& right, Mode const& mode) : SignalType(left, right, mode) {}
   operator bool() const 
@@ -152,7 +240,7 @@ struct deciCom::Input::SignalType::Boolable : deciCom::Input::SignalType
         && left.description == std::get<signal>(right).description; 
   }
 };
-struct deciCom::Input::AnyType
+struct deciComData::Input::AnyType
 {
   Right right;
   Mode mode;
@@ -160,7 +248,7 @@ struct deciCom::Input::AnyType
   AnyType(Right const& right, Mode const& mode) : right(right), mode(mode) {}
   explicit operator Input() const { return Input(any, right, mode); }
 };
-struct deciCom::Input::AllType
+struct deciComData::Input::AllType
 {
   Right right;
   Mode mode;
@@ -168,7 +256,7 @@ struct deciCom::Input::AllType
   AllType(Right const& right, Mode const& mode) : right(right), mode(mode) {}
   explicit operator Input() const { return Input(all, right, mode); }
 };
-struct deciCom::Input::EachType
+struct deciComData::Input::EachType
 {
   Right right;
   Mode mode;
@@ -176,14 +264,14 @@ struct deciCom::Input::EachType
   EachType(Right const& right, Mode const& mode) : right(right), mode(mode) {}
   explicit operator Input() const { return Input(each, right, mode); }
 };
-struct deciCom::Output::AllType
+struct deciComData::Output::AllType
 {
   Value value;
 
   AllType(Value const& value) : value(value) {}
   explicit operator Output() const { return Output(all, value); }
 };
-struct deciCom::Output::EachType
+struct deciComData::Output::EachType
 {
   Value value;
 
@@ -191,7 +279,7 @@ struct deciCom::Output::EachType
   explicit operator Output() const { return Output(each, value); }
 };
 
-struct ariCom
+struct ariComData
 {
   struct Mode
   {
@@ -200,14 +288,14 @@ struct ariCom
     enum class Enum;
     static std::vector<Mode> const modes;
     static std::vector<Mode> createModes();
-    Description const * const description;
+    Description const * description;
 
-    Mode(Description const * const& desc) : description(desc) { }
+    Mode(Description const * desc) : description(desc) { }
   };
   struct Input
   {
-    using Left = std::variant<int, Each, signal>;
-    using Right = std::variant<int, signal>;
+    using Left = std::variant<int32_t, Each, signal>;
+    using Right = std::variant<int32_t, signal>;
     
     Left left;
     Right right;
@@ -229,33 +317,33 @@ struct ariCom
   Mode mode;
   Output output;
 
-  ariCom(Input::Left const& left, Input::Right const& right, Mode const& mode, Output output)
+  ariComData(Input::Left const& left, Input::Right const& right, Mode const& mode, Output output)
     : left(left), right(right), mode(mode), output(output) 
   {
     assert(!std::holds_alternative<Each>(output.value) || std::holds_alternative<Each>(left));
   }
 };
-struct ariCom::Mode::Description
+struct ariComData::Mode::Description
 {
   std::string name;
   std::string codeSyntax;
   std::string gameSyntax;
-  int index;
+  size_t index;
 
-  Description(std::string const& name, std::string const& codeSyntax, std::string const& gameSyntax, int index)
-    : name(name), codeSyntax(codeSyntax), gameSyntax(gameSyntax) {}
+  Description(std::string const& name, std::string const& codeSyntax, std::string const& gameSyntax, size_t index)
+    : name(name), codeSyntax(codeSyntax), gameSyntax(gameSyntax), index(index) {}
 };
-struct ariCom::Input::IntSignalType
+struct ariComData::Input::IntSignalType
 {
-  std::variant<int, signal> left;
+  std::variant<int32_t, signal> left;
   Right right;
   Mode mode;
 
-  IntSignalType(std::variant<int, signal> const& left, Right const& right, Mode const& mode) : left(left), right(right), mode(mode) {}
+  IntSignalType(std::variant<int32_t, signal> const& left, Right const& right, Mode const& mode) : left(left), right(right), mode(mode) {}
   explicit operator Input() const 
   { 
-    if(std::holds_alternative<int>(left))
-      return Input(std::get<int>(left), right, mode); 
+    if(std::holds_alternative<int32_t>(left))
+      return Input(std::get<int32_t>(left), right, mode);
     else 
       return Input(std::get<signal>(left), right, mode);
   }
@@ -270,111 +358,126 @@ struct wildCard
   explicit wildCard(All const&) : value(all) {}
   explicit wildCard(Each const&) : value(each) {}
 
-  operator deciCom::Input::Left() const
+  operator deciComData::Input::Left() const
   {
     return std::visit(overload(
-      [](Any const&) { return deciCom::Input::Left(any); },
-      [](All const&) { return deciCom::Input::Left(all); },
-      [](Each const&) { return deciCom::Input::Left(each); }
+      [](Any const&) { return deciComData::Input::Left(any); },
+      [](All const&) { return deciComData::Input::Left(all); },
+      [](Each const&) { return deciComData::Input::Left(each); }
     ), this->value);
   }
-  operator deciCom::Output::Type() const
+  operator deciComData::Output::Type() const
   {
     return std::visit(overload(
-      [](Any const&) { assert(false); return deciCom::Output::Type(all); }, // deciCom output is never allowed to be any
-      [](All const&) { return deciCom::Output::Type(all); },
-      [](Each const&) { return deciCom::Output::Type(each); }
+      [](Any const&) { assert(false); return deciComData::Output::Type(all); }, // deciCom output is never allowed to be any
+      [](All const&) { return deciComData::Output::Type(all); },
+      [](Each const&) { return deciComData::Output::Type(each); }
     ), this->value);
   }
-  operator ariCom::Input::Left() const
+  operator ariComData::Input::Left() const
   {
-    std::visit(overload(
-      [](Any const&) { assert(false); }, // ariCom input is never allowed to be any
-      [](All const&) { assert(false); }, // ariCom input is never allowed to be all
-      [](Each const&) {  }
-    ), this->value);
-    return ariCom::Input::Left(each);
+    assert(std::holds_alternative<Each>(this->value)); // ariCom input is never allowed to be any or all
+    return ariComData::Input::Left(each);
   }
-  explicit operator ariCom::Output() const
+  explicit operator ariComData::Output() const
   {
-    std::visit(overload(
-      [](Any const&) { assert(false); }, // ariCom output is never allowed to be any
-      [](All const&) { assert(false); }, // ariCom output is never allowed to be all
-      [](Each const&) {  }
-    ), this->value);
-    return ariCom::Output(each);
+    assert(std::holds_alternative<Each>(this->value)); // ariCom output is never allowed to be any or all
+    return ariComData::Output(each);
   }
 };
 
-#define operations(equalArg, compArg)  \
-  op(smaller,      <,  "<", compArg)   \
-  op(greater,      >,  ">", compArg)   \
-  op(equal,        ==, "=", equalArg)  \
-  op(greaterEqual, >=, u8"≥", compArg) \
-  op(smallerEqual, <=, u8"≤", compArg) \
-  op(notEqual,     !=, u8"≠", equalArg)
+#define operations(equalArg, compArg)               \
+  op(smaller,      <,  "<",               compArg)  \
+  op(greater,      >,  ">",               compArg)  \
+  op(equal,        ==, "=",               equalArg) \
+  op(greaterEqual, >=, u8"≥"/*"\u2265"*/, compArg)  \
+  op(smallerEqual, <=, u8"≤"/*"\u2264"*/, compArg)  \
+  op(notEqual,     !=, u8"≠"/*"\u2260"*/, equalArg)
 
 
-enum class deciCom::Mode::Enum {
+enum class deciComData::Mode::Enum {
 #define op(opName, codeSyntax, gameSyntax, arg) \
   opName,
   operations(,) };
 #undef op
 
-std::vector<deciCom::Mode> deciCom::Mode::createModes()
+std::vector<deciComData::Mode> const deciComData::Mode::modes = []()
 {
   std::vector<Mode> result;
   size_t i = 0;
 #define op(name, codeSyntax, gameSyntax, arg) \
-  result.push_back(Mode(new deciCom::Mode::Description(#name, #codeSyntax, gameSyntax, i++)));
-  operations(,)
+  result.push_back(Mode(new deciComData::Mode::Description(#name, #codeSyntax, gameSyntax, i++)));
+  operations(, )
 #undef op
-  return result;
-}
-deciCom::Output::Value const input = deciCom::Output::Value();
-std::vector<deciCom::Mode> const deciCom::Mode::modes = deciCom::Mode::createModes();
+    return result;
+}();
+#define input deciComData::Output::Value()
 
 namespace deciComMode {
 #define op(opName, codeSyntax, gameSyntax, arg) \
-  deciCom::Mode const opName = deciCom::Mode::modes[(int)deciCom::Mode::Enum::##opName];
+  deciComData::Mode const opName = deciComData::Mode::modes[size_t(deciComData::Mode::Enum::##opName)];
   operations(,)
 #undef op
 }
 
-#define allRightOps(codeSyntax, leftType, outputType, generalOutType, signalOutType, ...)                                  \
-auto operator codeSyntax(leftType, deciCom::Input::Right const& right) { return outputType##generalOutType(__VA_ARGS__); } \
-auto operator codeSyntax(leftType, signal const& right)                { return outputType##signalOutType(__VA_ARGS__); }  \
-auto operator codeSyntax(leftType, int const& right)                   { return outputType(__VA_ARGS__); }
+#define allRightOps(codeSyntax, leftType, outputType, generalOutType, signalOutType, ...)                                      \
+auto operator codeSyntax(leftType, deciComData::Input::Right const& right) { return outputType##generalOutType(__VA_ARGS__); } \
+auto operator codeSyntax(leftType, signal const& right)                    { return outputType##signalOutType(__VA_ARGS__); }  \
+auto operator codeSyntax(leftType, int32_t const& right)                   { return outputType(__VA_ARGS__); }
 
-#define op(opName, codeSyntax, gameSyntax, arg)                                                                                   \
-allRightOps(codeSyntax, deciCom::Input::Left const& left, deciCom::Input,             arg, arg, left, right, deciComMode::opName) \
-allRightOps(codeSyntax, Any const&,                       deciCom::Input::AnyType,       ,    , right, deciComMode::opName)       \
-allRightOps(codeSyntax, All const&,                       deciCom::Input::AllType,       ,    , right, deciComMode::opName)       \
-allRightOps(codeSyntax, Each const&,                      deciCom::Input::EachType,      ,    , right, deciComMode::opName)       \
-allRightOps(codeSyntax, signal const& left,               deciCom::Input::SignalType, arg, arg, left, right, deciComMode::opName) \
-allRightOps(codeSyntax, wildCard const& left,             deciCom::Input,                ,    , left, right, deciComMode::opName)
+#define op(opName, codeSyntax, gameSyntax, arg)                                                                                           \
+allRightOps(codeSyntax, deciComData::Input::Left const& left, deciComData::Input,             arg, arg, left, right, deciComMode::opName) \
+allRightOps(codeSyntax, Any const&,                           deciComData::Input::AnyType,       ,    , right, deciComMode::opName)       \
+allRightOps(codeSyntax, All const&,                           deciComData::Input::AllType,       ,    , right, deciComMode::opName)       \
+allRightOps(codeSyntax, Each const&,                          deciComData::Input::EachType,      ,    , right, deciComMode::opName)       \
+allRightOps(codeSyntax, signal const& left,                   deciComData::Input::SignalType, arg, arg, left, right, deciComMode::opName) \
+allRightOps(codeSyntax, wildCard const& left,                 deciComData::Input,                ,    , left, right, deciComMode::opName)
 operations(::Boolable,)
 #undef op
 #undef allRightOps
 #undef operations
 
-auto operator+=(deciCom::Output::Type const& left, deciCom::Output::Value const& right) { return deciCom::Output(left, right); }
-auto operator+=(signal const& left,                deciCom::Output::Value const& right) { return deciCom::Output(left, right); }
-auto operator+=(All const&,                        deciCom::Output::Value const& right) { return deciCom::Output::AllType(right); }
-auto operator+=(Each const&,                       deciCom::Output::Value const& right) { return deciCom::Output::EachType(right); }
+auto operator+=(deciComData::Output::Type const& left, deciComData::Output::Value const& right) { return deciComData::Output(left, right); }
+auto operator+=(signal const& left,                    deciComData::Output::Value const& right) { return deciComData::Output(left, right); }
+auto operator+=(All const&,                            deciComData::Output::Value const& right) { return deciComData::Output::AllType(right); }
+auto operator+=(Each const&,                           deciComData::Output::Value const& right) { return deciComData::Output::EachType(right); }
+
+template<color c>
+struct deciCom
+{
+  std::shared_ptr<deciComData> data;
+  deciCom(std::shared_ptr<deciComData> const& other) : data(other) {}
+};
+template<>
+struct deciCom<color::rg>
+{
+  std::shared_ptr<deciComData> data;
+  deciCom<color::r> r;
+  deciCom<color::g> g;
+
+  deciCom(deciComData::Input::Left const& left
+    , deciComData::Input::Right const& right
+    , deciComData::Mode const& mode
+    , deciComData::Output::Type const& output
+    , deciComData::Output::Value const& value)
+    : data(std::make_shared<deciComData>(left, right, mode, output, value)), r(this->data), g(this->data) {}
+
+  deciComData* operator->() { return data.operator->(); }
+};
+deciCom(deciComData::Input::Left, deciComData::Input::Right, deciComData::Mode, deciComData::Output::Type, deciComData::Output::Value)->deciCom<color::rg>;
 
 #define then >>=
-auto operator then(deciCom::Input const& left,             deciCom::Output const& right)           { return deciCom(left.left, left.right, left.mode, right.output, right.value); }
-auto operator then(deciCom::Input const& left,             deciCom::Output::AllType const& right)  { return deciCom(left.left, left.right, left.mode, all, right.value); }
-auto operator then(deciCom::Input const& left,             deciCom::Output::EachType const& right) { return deciCom(left.left, left.right, left.mode, each, right.value); }
-auto operator then(deciCom::Input::SignalType const& left, deciCom::Output const& right)           { return deciCom(left.left, left.right, left.mode, right.output, right.value); }
-auto operator then(deciCom::Input::SignalType const& left, deciCom::Output::AllType const& right)  { return deciCom(left.left, left.right, left.mode, all, right.value); }
-auto operator then(deciCom::Input::AllType const& left,    deciCom::Output const& right)           { return deciCom(all, left.right, left.mode, right.output, right.value); }
-auto operator then(deciCom::Input::AllType const& left,    deciCom::Output::AllType const& right)  { return deciCom(all, left.right, left.mode, all, right.value); }
-auto operator then(deciCom::Input::AnyType const& left,    deciCom::Output const& right)           { return deciCom(any, left.right, left.mode, right.output, right.value); }
-auto operator then(deciCom::Input::AnyType const& left,    deciCom::Output::AllType const& right)  { return deciCom(any, left.right, left.mode, all, right.value); }
-auto operator then(deciCom::Input::EachType const& left,   deciCom::Output const& right)           { return deciCom(each, left.right, left.mode, right.output, right.value); }
-auto operator then(deciCom::Input::EachType const& left,   deciCom::Output::EachType const& right) { return deciCom(each, left.right, left.mode, each, right.value); }
+auto operator then(deciComData::Input const& left,             deciComData::Output const& right)           { return deciCom<color::rg>(left.left, left.right, left.mode, right.output, right.value); }
+auto operator then(deciComData::Input const& left,             deciComData::Output::AllType const& right)  { return deciCom<color::rg>(left.left, left.right, left.mode, all, right.value); }
+auto operator then(deciComData::Input const& left,             deciComData::Output::EachType const& right) { return deciCom<color::rg>(left.left, left.right, left.mode, each, right.value); }
+auto operator then(deciComData::Input::SignalType const& left, deciComData::Output const& right)           { return deciCom<color::rg>(left.left, left.right, left.mode, right.output, right.value); }
+auto operator then(deciComData::Input::SignalType const& left, deciComData::Output::AllType const& right)  { return deciCom<color::rg>(left.left, left.right, left.mode, all, right.value); }
+auto operator then(deciComData::Input::AllType const& left,    deciComData::Output const& right)           { return deciCom<color::rg>(all, left.right, left.mode, right.output, right.value); }
+auto operator then(deciComData::Input::AllType const& left,    deciComData::Output::AllType const& right)  { return deciCom<color::rg>(all, left.right, left.mode, all, right.value); }
+auto operator then(deciComData::Input::AnyType const& left,    deciComData::Output const& right)           { return deciCom<color::rg>(any, left.right, left.mode, right.output, right.value); }
+auto operator then(deciComData::Input::AnyType const& left,    deciComData::Output::AllType const& right)  { return deciCom<color::rg>(any, left.right, left.mode, all, right.value); }
+auto operator then(deciComData::Input::EachType const& left,   deciComData::Output const& right)           { return deciCom<color::rg>(each, left.right, left.mode, right.output, right.value); }
+auto operator then(deciComData::Input::EachType const& left,   deciComData::Output::EachType const& right) { return deciCom<color::rg>(each, left.right, left.mode, each, right.value); }
 
 
 #define operations              \
@@ -390,29 +493,29 @@ auto operator then(deciCom::Input::EachType const& left,   deciCom::Output::Each
   op(bitOr,         OR,  "OR")  \
   op(bitXor,        XOR, "XOR")
 
-enum class ariCom::Mode::Enum {
+enum class ariComData::Mode::Enum {
 #define op(opName, codeSyntax, gameSyntax) \
   opName,
   operations };
 #undef op
 
 
-std::vector<ariCom::Mode> ariCom::Mode::createModes()
+std::vector<ariComData::Mode> ariComData::Mode::createModes()
 {
-  std::vector<ariCom::Mode> result;
+  std::vector<ariComData::Mode> result;
   size_t i = 0;
 #define op(name, codeSyntax, gameSyntax) \
-    result.push_back(ariCom::Mode(new ariCom::Mode::Description(#name, #codeSyntax, gameSyntax, i++)));  
+    result.push_back(ariComData::Mode(new ariComData::Mode::Description(#name, #codeSyntax, gameSyntax, i++)));  
   operations;
 #undef op
   return result;
 }
-std::vector<ariCom::Mode> const ariCom::Mode::modes = ariCom::Mode::createModes();
+std::vector<ariComData::Mode> const ariComData::Mode::modes = ariComData::Mode::createModes();
 
 namespace ariComMode
 {
 #define op(opName, codeSyntax, gameSyntax) \
-  ariCom::Mode const opName = ariCom::Mode::modes[(int)ariCom::Mode::Enum::##opName];
+  ariComData::Mode const opName = ariComData::Mode::modes[size_t(ariComData::Mode::Enum::##opName)];
   operations
 #undef op
 }
@@ -421,20 +524,43 @@ namespace ariComMode
 #define OR |
 #define XOR ||
 
-#define op(opName, codeSyntax, gameSyntax)                                                                                                                             \
-auto operator codeSyntax(ariCom::Input::Left const& left, ariCom::Input::Right const& right) { return ariCom::Input(left, right, ariComMode::opName); }                \
-auto operator codeSyntax(int const& left,                 ariCom::Input::Right const& right) { return ariCom::Input::IntSignalType(left, right, ariComMode::opName); } \
-auto operator codeSyntax(Each const&,                     ariCom::Input::Right const& right) { return ariCom::Input(each, right, ariComMode::opName); }                \
-auto operator codeSyntax(signal const& left,              ariCom::Input::Right const& right) { return ariCom::Input::IntSignalType(left, right, ariComMode::opName); }
+#define op(opName, codeSyntax, gameSyntax)                                                                                                                                         \
+auto operator codeSyntax(ariComData::Input::Left const& left, ariComData::Input::Right const& right) { return ariComData::Input(left, right, ariComMode::opName); }                \
+auto operator codeSyntax(int32_t const& left,                 ariComData::Input::Right const& right) { return ariComData::Input::IntSignalType(left, right, ariComMode::opName); } \
+auto operator codeSyntax(Each const&,                         ariComData::Input::Right const& right) { return ariComData::Input(each, right, ariComMode::opName); }                \
+auto operator codeSyntax(signal const& left,                  ariComData::Input::Right const& right) { return ariComData::Input::IntSignalType(left, right, ariComMode::opName); }
 operations
 #undef op
 #undef operations
 
+template<color c>
+struct ariCom
+{
+  std::shared_ptr<ariComData> data;
+  ariCom(std::shared_ptr<ariComData> const& other) : data(other) {}
+};
+template<>
+struct ariCom<color::rg>
+{
+  std::shared_ptr<ariComData> data;
+  ariCom<color::r> r;
+  ariCom<color::g> g;
+
+  ariCom(ariComData::Input::Left const& left
+    , ariComData::Input::Right const& right
+    , ariComData::Mode const& mode
+    , ariComData::Output const& output)
+    : data(std::make_shared<ariComData>(left, right, mode, output)), r(this->data), g(this->data) {}
+
+  ariComData* operator->() { return data.operator->(); }
+};
+ariCom(ariComData::Input::Left, ariComData::Input::Right, ariComData::Mode, ariComData::Output)->ariCom<color::rg>;
+
 #define on >>=
-auto operator on(ariCom::Input const& left,                ariCom::Output const& right) { return ariCom(left.left, left.right, left.mode, right); }
-auto operator on(ariCom::Input const& left,                Each const&)                 { return left on ariCom::Output(each); }
-auto operator on(ariCom::Input const& left,                wildCard const& right)       { return left on ariCom::Output(right); }
-auto operator on(ariCom::Input::IntSignalType const& left, ariCom::Output const& right) { return ariCom::Input(left) on right; }
+auto operator on(ariComData::Input const& left,                ariComData::Output const& right) { return ariCom<color::rg>(left.left, left.right, left.mode, right); }
+auto operator on(ariComData::Input const& left,                Each const&)                     { return left on ariComData::Output(each); }
+auto operator on(ariComData::Input const& left,                wildCard const& right)           { return left on ariComData::Output(right); }
+auto operator on(ariComData::Input::IntSignalType const& left, ariComData::Output const& right) { return ariComData::Input(left) on right; }
 
 
 #define EXPAND(x) x
@@ -455,32 +581,32 @@ autoOperators(wildCard, value.index())
 //autoOperators(signal, description)
 autoOperators(signal::Description, index)
 
-autoOperators(deciCom::Mode, description)
-autoOperators(deciCom, left, right, mode, output, value)
-autoOperators(deciCom::Mode::Description, index)
-autoOperators(deciCom::Input, left, right, mode)
-autoOperators(deciCom::Input::AllType, right, mode)
-autoOperators(deciCom::Input::AnyType, right, mode)
-autoOperators(deciCom::Input::EachType, right, mode)
-autoOperators(deciCom::Input::SignalType, left, right, mode)
-autoOperators(deciCom::Output, output, value)
-autoOperators(deciCom::Output::AllType, value)
-autoOperators(deciCom::Output::EachType, value)
+autoOperators(deciComData::Mode, description)
+autoOperators(deciComData, left, right, mode, output, value)
+autoOperators(deciComData::Mode::Description, index)
+autoOperators(deciComData::Input, left, right, mode)
+autoOperators(deciComData::Input::AllType, right, mode)
+autoOperators(deciComData::Input::AnyType, right, mode)
+autoOperators(deciComData::Input::EachType, right, mode)
+autoOperators(deciComData::Input::SignalType, left, right, mode)
+autoOperators(deciComData::Output, output, value)
+autoOperators(deciComData::Output::AllType, value)
+autoOperators(deciComData::Output::EachType, value)
 
-autoOperators(ariCom::Mode, description)
-autoOperators(ariCom::Output, value)
-autoOperators(ariCom, left, right, mode, output)
-autoOperators(ariCom::Mode::Description, index)
-autoOperators(ariCom::Input, left, right, mode)
-autoOperators(ariCom::Input::IntSignalType, left, right, mode)
+autoOperators(ariComData::Mode, description)
+autoOperators(ariComData::Output, value)
+autoOperators(ariComData, left, right, mode, output)
+autoOperators(ariComData::Mode::Description, index)
+autoOperators(ariComData::Input, left, right, mode)
+autoOperators(ariComData::Input::IntSignalType, left, right, mode)
 
 #undef autoOperator
 #define autoOperator(in, out, ...) std::operator==(left, right)
-autoOperators(deciCom::Input::Left)
-autoOperators(deciCom::Input::Right)
-autoOperators(deciCom::Output::Type)
-autoOperators(deciCom::Output::Value)
-autoOperators(ariCom::Input::Left)
+autoOperators(deciComData::Input::Left)
+autoOperators(deciComData::Input::Right)
+autoOperators(deciComData::Output::Type)
+autoOperators(deciComData::Output::Value)
+autoOperators(ariComData::Input::Left)
 //autoOperators(ariCom::Input::Right) same as deciCom::Input::Right
 
 // the cross wild card ops are necessary, since it's possible to do them anyway e.g. due to implicit conversions to deciCom::Input::Left
@@ -513,51 +639,51 @@ bool operator!=(wildCard const& card, Any  const&) { return !std::holds_alternat
 bool operator!=(wildCard const& card, All  const&) { return !std::holds_alternative<All>(card.value); }
 bool operator!=(wildCard const& card, Each const&) { return !std::holds_alternative<Each>(card.value); }
 
-bool operator==(deciCom::Input const& left, deciCom::Input::AnyType const& right) { return left == deciCom::Input(right); }
-bool operator==(deciCom::Input const& left, deciCom::Input::AllType const& right) { return left == deciCom::Input(right); }
-bool operator==(deciCom::Input const& left, deciCom::Input::EachType const& right) { return left == deciCom::Input(right); }
-bool operator==(deciCom::Input const& left, deciCom::Input::SignalType const& right) { return left == deciCom::Input(right); }
-bool operator!=(deciCom::Input const& left, deciCom::Input::AnyType const& right) { return left != deciCom::Input(right); }
-bool operator!=(deciCom::Input const& left, deciCom::Input::AllType const& right) { return left != deciCom::Input(right); }
-bool operator!=(deciCom::Input const& left, deciCom::Input::EachType const& right) { return left != deciCom::Input(right); }
-bool operator!=(deciCom::Input const& left, deciCom::Input::SignalType const& right) { return left != deciCom::Input(right); }
+bool operator==(deciComData::Input const& left, deciComData::Input::AnyType const& right) { return left == deciComData::Input(right); }
+bool operator==(deciComData::Input const& left, deciComData::Input::AllType const& right) { return left == deciComData::Input(right); }
+bool operator==(deciComData::Input const& left, deciComData::Input::EachType const& right) { return left == deciComData::Input(right); }
+bool operator==(deciComData::Input const& left, deciComData::Input::SignalType const& right) { return left == deciComData::Input(right); }
+bool operator!=(deciComData::Input const& left, deciComData::Input::AnyType const& right) { return left != deciComData::Input(right); }
+bool operator!=(deciComData::Input const& left, deciComData::Input::AllType const& right) { return left != deciComData::Input(right); }
+bool operator!=(deciComData::Input const& left, deciComData::Input::EachType const& right) { return left != deciComData::Input(right); }
+bool operator!=(deciComData::Input const& left, deciComData::Input::SignalType const& right) { return left != deciComData::Input(right); }
 
-bool operator==(deciCom::Input::AnyType const& left, deciCom::Input const& right) { return deciCom::Input(left) == right; }
-bool operator==(deciCom::Input::AllType const& left, deciCom::Input const& right) { return deciCom::Input(left) == right; }
-bool operator==(deciCom::Input::EachType const& left, deciCom::Input const& right) { return deciCom::Input(left) == right; }
-bool operator==(deciCom::Input::SignalType const& left, deciCom::Input const& right) { return deciCom::Input(left) == right; }
-bool operator!=(deciCom::Input::AnyType const& left, deciCom::Input const& right) { return deciCom::Input(left) != right; }
-bool operator!=(deciCom::Input::AllType const& left, deciCom::Input const& right) { return deciCom::Input(left) != right; }
-bool operator!=(deciCom::Input::EachType const& left, deciCom::Input const& right) { return deciCom::Input(left) != right; }
-bool operator!=(deciCom::Input::SignalType const& left, deciCom::Input const& right) { return deciCom::Input(left) != right; }
+bool operator==(deciComData::Input::AnyType const& left, deciComData::Input const& right) { return deciComData::Input(left) == right; }
+bool operator==(deciComData::Input::AllType const& left, deciComData::Input const& right) { return deciComData::Input(left) == right; }
+bool operator==(deciComData::Input::EachType const& left, deciComData::Input const& right) { return deciComData::Input(left) == right; }
+bool operator==(deciComData::Input::SignalType const& left, deciComData::Input const& right) { return deciComData::Input(left) == right; }
+bool operator!=(deciComData::Input::AnyType const& left, deciComData::Input const& right) { return deciComData::Input(left) != right; }
+bool operator!=(deciComData::Input::AllType const& left, deciComData::Input const& right) { return deciComData::Input(left) != right; }
+bool operator!=(deciComData::Input::EachType const& left, deciComData::Input const& right) { return deciComData::Input(left) != right; }
+bool operator!=(deciComData::Input::SignalType const& left, deciComData::Input const& right) { return deciComData::Input(left) != right; }
 
-bool operator==(deciCom::Output const& left, deciCom::Output::AllType const& right) { return left == deciCom::Output(right); }
-bool operator==(deciCom::Output const& left, deciCom::Output::EachType const& right) { return left == deciCom::Output(right); }
-bool operator!=(deciCom::Output const& left, deciCom::Output::AllType const& right) { return left != deciCom::Output(right); }
-bool operator!=(deciCom::Output const& left, deciCom::Output::EachType const& right) { return left != deciCom::Output(right); }
+bool operator==(deciComData::Output const& left, deciComData::Output::AllType const& right) { return left == deciComData::Output(right); }
+bool operator==(deciComData::Output const& left, deciComData::Output::EachType const& right) { return left == deciComData::Output(right); }
+bool operator!=(deciComData::Output const& left, deciComData::Output::AllType const& right) { return left != deciComData::Output(right); }
+bool operator!=(deciComData::Output const& left, deciComData::Output::EachType const& right) { return left != deciComData::Output(right); }
 
-bool operator==(deciCom::Output::AllType const& left, deciCom::Output const& right) { return deciCom::Output(left) == right; }
-bool operator==(deciCom::Output::EachType const& left, deciCom::Output const& right) { return deciCom::Output(left) == right; }
-bool operator!=(deciCom::Output::AllType const& left, deciCom::Output const& right) { return deciCom::Output(left) != right; }
-bool operator!=(deciCom::Output::EachType const& left, deciCom::Output const& right) { return deciCom::Output(left) != right; }
+bool operator==(deciComData::Output::AllType const& left, deciComData::Output const& right) { return deciComData::Output(left) == right; }
+bool operator==(deciComData::Output::EachType const& left, deciComData::Output const& right) { return deciComData::Output(left) == right; }
+bool operator!=(deciComData::Output::AllType const& left, deciComData::Output const& right) { return deciComData::Output(left) != right; }
+bool operator!=(deciComData::Output::EachType const& left, deciComData::Output const& right) { return deciComData::Output(left) != right; }
 
-bool operator==(ariCom::Input const& left, ariCom::Input::IntSignalType const& right) { return left == ariCom::Input(right); }
-bool operator!=(ariCom::Input const& left, ariCom::Input::IntSignalType const& right) { return left != ariCom::Input(right); }
-bool operator==(ariCom::Input::IntSignalType const& left, ariCom::Input const& right) { return ariCom::Input(left) == right; }
-bool operator!=(ariCom::Input::IntSignalType const& left, ariCom::Input const& right) { return ariCom::Input(left) != right; }
+bool operator==(ariComData::Input const& left, ariComData::Input::IntSignalType const& right) { return left == ariComData::Input(right); }
+bool operator!=(ariComData::Input const& left, ariComData::Input::IntSignalType const& right) { return left != ariComData::Input(right); }
+bool operator==(ariComData::Input::IntSignalType const& left, ariComData::Input const& right) { return ariComData::Input(left) == right; }
+bool operator!=(ariComData::Input::IntSignalType const& left, ariComData::Input const& right) { return ariComData::Input(left) != right; }
 
-bool operator==(ariCom::Output const& out, Each const&) { return std::holds_alternative<Each>(out.value); }
-bool operator!=(ariCom::Output const& out, Each const&) { return !std::holds_alternative<Each>(out.value); }
-bool operator==(Each const&, ariCom::Output const& out) { return std::holds_alternative<Each>(out.value); }
-bool operator!=(Each const&, ariCom::Output const& out) { return !std::holds_alternative<Each>(out.value); }
+bool operator==(ariComData::Output const& out, Each const&) { return std::holds_alternative<Each>(out.value); }
+bool operator!=(ariComData::Output const& out, Each const&) { return !std::holds_alternative<Each>(out.value); }
+bool operator==(Each const&, ariComData::Output const& out) { return std::holds_alternative<Each>(out.value); }
+bool operator!=(Each const&, ariComData::Output const& out) { return !std::holds_alternative<Each>(out.value); }
 
-bool operator==(ariCom::Output const& out, wildCard const& card) { return std::holds_alternative<Each>(out.value) && std::holds_alternative<Each>(card.value); }
-bool operator!=(ariCom::Output const& out, wildCard const& card) { return !std::holds_alternative<Each>(out.value) || !std::holds_alternative<Each>(card.value); }
-bool operator==(wildCard const& card, ariCom::Output const& out) { return std::holds_alternative<Each>(out.value) && std::holds_alternative<Each>(card.value); }
-bool operator!=(wildCard const& card, ariCom::Output const& out) { return !std::holds_alternative<Each>(out.value) || !std::holds_alternative<Each>(card.value); }
+bool operator==(ariComData::Output const& out, wildCard const& card) { return std::holds_alternative<Each>(out.value) && std::holds_alternative<Each>(card.value); }
+bool operator!=(ariComData::Output const& out, wildCard const& card) { return !std::holds_alternative<Each>(out.value) || !std::holds_alternative<Each>(card.value); }
+bool operator==(wildCard const& card, ariComData::Output const& out) { return std::holds_alternative<Each>(out.value) && std::holds_alternative<Each>(card.value); }
+bool operator!=(wildCard const& card, ariComData::Output const& out) { return !std::holds_alternative<Each>(out.value) || !std::holds_alternative<Each>(card.value); }
 
 
-struct deciCom::Mode::Helper
+struct deciComData::Mode::Helper
 {
   Input::Left left;
   Mode mode;
@@ -585,49 +711,248 @@ struct deciCom::Mode::Helper
   };
 };
 
-auto operator<(deciCom::Input::Left const& left, deciCom::Mode const& right) { return deciCom::Mode::Helper(left, right); }
-auto operator<(Any const&,                       deciCom::Mode const& right) { return deciCom::Mode::Helper::AnyType(right); }
-auto operator<(All const&,                       deciCom::Mode const& right) { return deciCom::Mode::Helper::AllType(right); }
-auto operator<(Each const&,                      deciCom::Mode const& right) { return deciCom::Mode::Helper::EachType(right); }
-auto operator<(signal const& left,               deciCom::Mode const& right) { return deciCom::Mode::Helper::SignalType(left, right); }
-auto operator<(wildCard const& left,             deciCom::Mode const& right) { return deciCom::Mode::Helper(left, right); }
+auto operator<(deciComData::Input::Left const& left, deciComData::Mode const& right) { return deciComData::Mode::Helper(left, right); }
+auto operator<(Any const&,                           deciComData::Mode const& right) { return deciComData::Mode::Helper::AnyType(right); }
+auto operator<(All const&,                           deciComData::Mode const& right) { return deciComData::Mode::Helper::AllType(right); }
+auto operator<(Each const&,                          deciComData::Mode const& right) { return deciComData::Mode::Helper::EachType(right); }
+auto operator<(signal const& left,                   deciComData::Mode const& right) { return deciComData::Mode::Helper::SignalType(left, right); }
+auto operator<(wildCard const& left,                 deciComData::Mode const& right) { return deciComData::Mode::Helper(left, right); }
 
-auto operator>(deciCom::Mode::Helper const& left, deciCom::Input::Right const& right) { return deciCom::Input(left.left, right, left.mode); }
-auto operator>(deciCom::Mode::Helper const& left, signal const& right)                { return deciCom::Input(left.left, right, left.mode); }
-auto operator>(deciCom::Mode::Helper const& left, int const& right)                   { return deciCom::Input(left.left, right, left.mode); }
-auto operator>(deciCom::Mode::Helper::AnyType const& left, deciCom::Input::Right const& right) { return deciCom::Input::AnyType(right, left.mode); }
-auto operator>(deciCom::Mode::Helper::AnyType const& left, signal const& right)                { return deciCom::Input::AnyType(right, left.mode); }
-auto operator>(deciCom::Mode::Helper::AnyType const& left, int const& right)                   { return deciCom::Input::AnyType(right, left.mode); }
-auto operator>(deciCom::Mode::Helper::AllType const& left, deciCom::Input::Right const& right) { return deciCom::Input::AllType(right, left.mode); }
-auto operator>(deciCom::Mode::Helper::AllType const& left, signal const& right)                { return deciCom::Input::AllType(right, left.mode); }
-auto operator>(deciCom::Mode::Helper::AllType const& left, int const& right)                   { return deciCom::Input::AllType(right, left.mode); }
-auto operator>(deciCom::Mode::Helper::EachType const& left, deciCom::Input::Right const& right) { return deciCom::Input::EachType(right, left.mode); }
-auto operator>(deciCom::Mode::Helper::EachType const& left, signal const& right)                { return deciCom::Input::EachType(right, left.mode); }
-auto operator>(deciCom::Mode::Helper::EachType const& left, int const& right)                   { return deciCom::Input::EachType(right, left.mode); }
-auto operator>(deciCom::Mode::Helper::SignalType const& left, deciCom::Input::Right const& right) { return deciCom::Input::SignalType(left.left, right, left.mode); }
-auto operator>(deciCom::Mode::Helper::SignalType const& left, signal const& right)                { return deciCom::Input::SignalType(left.left, right, left.mode); }
-auto operator>(deciCom::Mode::Helper::SignalType const& left, int const& right)                   { return deciCom::Input::SignalType(left.left, right, left.mode); }
+auto operator>(deciComData::Mode::Helper const& left, deciComData::Input::Right const& right)             { return deciComData::Input(left.left, right, left.mode); }
+auto operator>(deciComData::Mode::Helper const& left, signal const& right)                                { return deciComData::Input(left.left, right, left.mode); }
+auto operator>(deciComData::Mode::Helper const& left, int32_t const& right)                               { return deciComData::Input(left.left, right, left.mode); }
+auto operator>(deciComData::Mode::Helper::AnyType const& left, deciComData::Input::Right const& right)    { return deciComData::Input::AnyType(right, left.mode); }
+auto operator>(deciComData::Mode::Helper::AnyType const& left, signal const& right)                       { return deciComData::Input::AnyType(right, left.mode); }
+auto operator>(deciComData::Mode::Helper::AnyType const& left, int32_t const& right)                      { return deciComData::Input::AnyType(right, left.mode); }
+auto operator>(deciComData::Mode::Helper::AllType const& left, deciComData::Input::Right const& right)    { return deciComData::Input::AllType(right, left.mode); }
+auto operator>(deciComData::Mode::Helper::AllType const& left, signal const& right)                       { return deciComData::Input::AllType(right, left.mode); }
+auto operator>(deciComData::Mode::Helper::AllType const& left, int32_t const& right)                      { return deciComData::Input::AllType(right, left.mode); }
+auto operator>(deciComData::Mode::Helper::EachType const& left, deciComData::Input::Right const& right)   { return deciComData::Input::EachType(right, left.mode); }
+auto operator>(deciComData::Mode::Helper::EachType const& left, signal const& right)                      { return deciComData::Input::EachType(right, left.mode); }
+auto operator>(deciComData::Mode::Helper::EachType const& left, int32_t const& right)                     { return deciComData::Input::EachType(right, left.mode); }
+auto operator>(deciComData::Mode::Helper::SignalType const& left, deciComData::Input::Right const& right) { return deciComData::Input::SignalType(left.left, right, left.mode); }
+auto operator>(deciComData::Mode::Helper::SignalType const& left, signal const& right)                    { return deciComData::Input::SignalType(left.left, right, left.mode); }
+auto operator>(deciComData::Mode::Helper::SignalType const& left, int32_t const& right)                   { return deciComData::Input::SignalType(left.left, right, left.mode); }
 
-struct ariCom::Mode::Helper
+struct ariComData::Mode::Helper
 {
   Input::Left left;
   Mode mode;
   Helper(Input::Left const& left, Mode const& mode) : left(left), mode(mode) {}
   struct IntSignalType
   {
-    std::variant<int, signal> left;
+    std::variant<int32_t, signal> left;
     Mode mode;
-    IntSignalType(std::variant<int, signal> const& left, Mode const& mode) : left(left), mode(mode) {}
+    IntSignalType(std::variant<int32_t, signal> const& left, Mode const& mode) : left(left), mode(mode) {}
   };
 };
 
-auto operator<(ariCom::Input::Left const& left, ariCom::Mode const& right) { return ariCom::Mode::Helper(left, right); }
-auto operator<(int const& left,                 ariCom::Mode const& right) { return ariCom::Mode::Helper::IntSignalType(left, right); }
-auto operator<(Each const&,                     ariCom::Mode const& right) { return ariCom::Mode::Helper(each, right); }
-auto operator<(signal const& left,              ariCom::Mode const& right) { return ariCom::Mode::Helper::IntSignalType(left, right); }
+auto operator<(ariComData::Input::Left const& left, ariComData::Mode const& right) { return ariComData::Mode::Helper(left, right); }
+auto operator<(int32_t const& left,                 ariComData::Mode const& right) { return ariComData::Mode::Helper::IntSignalType(left, right); }
+auto operator<(Each const&,                         ariComData::Mode const& right) { return ariComData::Mode::Helper(each, right); }
+auto operator<(signal const& left,                  ariComData::Mode const& right) { return ariComData::Mode::Helper::IntSignalType(left, right); }
 
-auto operator>(ariCom::Mode::Helper const& left, ariCom::Input::Right const& right) { return ariCom::Input(left.left, right, left.mode); }
-auto operator>(ariCom::Mode::Helper::IntSignalType const& left, ariCom::Input::Right const& right) { return ariCom::Input::IntSignalType(left.left, right, left.mode); }
+auto operator>(ariComData::Mode::Helper const& left, ariComData::Input::Right const& right) { return ariComData::Input(left.left, right, left.mode); }
+auto operator>(ariComData::Mode::Helper::IntSignalType const& left, ariComData::Input::Right const& right) { return ariComData::Input::IntSignalType(left.left, right, left.mode); }
+
+using conComData = std::array<std::optional<signal::WithValue>, 18>;
+
+std::variant<conComData, deciComData, ariComData> to(std::variant<deciComData, ariComData> const& from)
+{
+  return std::visit(overload(
+    [](deciComData const& from) -> std::variant<conComData, deciComData, ariComData> { return from; },
+    [](ariComData const& from)  -> std::variant<conComData, deciComData, ariComData> { return from; }
+  ), from);
+}
+
+struct networkSource
+{
+  std::optional<std::variant<conComData, deciComData, ariComData>> combinator;
+  std::optional<std::variant<wire<color::r>, wire<color::g>, wire<color::rg>>> combinatorInput;
+
+  networkSource(conComData const& comb) : combinator(comb), combinatorInput() {}
+  networkSource(std::variant<deciComData, ariComData> const& combinator
+              , std::variant<wire<color::r>, wire<color::g>, wire<color::rg>> const& source)
+    : combinator(to(combinator)), combinatorInput(source) {}
+  networkSource() : combinator(), combinatorInput() {}
+};
+struct network
+{
+  std::vector<size_t> sources;
+  std::vector<size_t> referencesInLookup; // contains i if and only if this == networks[networkLookup[i]]
+  color c;
+  bool canStillMerge = true;
+  
+  network(size_t const& index
+    , color c)
+    : sources()
+    , referencesInLookup()
+  {
+    this->c = c;
+    sources.push_back(index);
+  }
+};
+
+std::vector<networkSource> sources;
+std::vector<network> networks;
+std::vector<size_t> networkLookup;
+
+template<color c>
+wire<c>::wire(connector<c> const& s) : source(s) { networks[networkLookup[this->source.source]].canStillMerge = false; }
+template<color c>
+bool connector<c>::operator==(connector<c> const& o) const { return networkLookup[this->source] == networkLookup[o.source]; }
+// ^^ these won't specialize for wire|connector<color::rg>, since the complete struct was specialized
+
+void merge(size_t left, size_t right)
+{
+  size_t lLeft = networkLookup[left];
+  size_t lRight = networkLookup[right];
+  network& ln = networks[lLeft];
+  network& rn = networks[lRight];
+  assert(ln.c == rn.c /* cannot merge connectors with different colors! */);
+  assert(&ln != &rn /* cannot merge a network with itself! */);
+  if (ln.canStillMerge)
+  {
+    // merge connectors ln and rn
+    assert(ln.canStillMerge && rn.canStillMerge /* cannot merge connectors after converting them to wires! */);
+    size_t lnEnd = ln.sources.size();
+    ln.sources.insert(ln.sources.end(), std::make_move_iterator(rn.sources.begin()), std::make_move_iterator(rn.sources.end()));
+    for (auto ref : rn.referencesInLookup)
+      networkLookup[ref] = lLeft;
+    ln.referencesInLookup.insert(ln.referencesInLookup.end(), std::make_move_iterator(rn.referencesInLookup.begin()), std::make_move_iterator(rn.referencesInLookup.end()));
+    if (lRight != networks.size() - 1)
+    {
+      for (auto ref : networks.back().referencesInLookup)
+        networkLookup[ref] = lRight;
+      std::swap(networks.back(), rn);
+    }
+    networks.pop_back();
+  }
+  else
+  {
+    // merge connector rn into loop wire ln
+    assert(ln.referencesInLookup.size() == 1 && ln.sources.size() == 1); // are you maybe trying to merge a second connector into the looped wire?
+    assert(!sources[ln.sources[0]].combinator.has_value() && !sources[ln.sources[0]].combinatorInput.has_value());
+    networkLookup[ln.referencesInLookup[0]] = lRight;
+    rn.referencesInLookup.push_back(ln.referencesInLookup[0]);
+    rn.canStillMerge = false;
+    if (lLeft != networks.size() - 1)
+    {
+      for (auto ref : networks.back().referencesInLookup)
+        networkLookup[ref] = lLeft;
+      std::swap(networks.back(), ln);
+    }
+    networks.pop_back();
+  }
+}
+
+
+template<color c>
+connector<c> getConnector(networkSource&& source)
+{
+  sources.emplace_back(source);
+  networks.emplace_back(network(sources.size() - 1, c));
+  networkLookup.emplace_back(networks.size() - 1);
+  networks.back().referencesInLookup.emplace_back(networkLookup.size() - 1);
+  return connector<c>(networkLookup.size() - 1);
+}
+template<>
+connector<color::rg> getConnector(networkSource&& source)
+{
+  sources.emplace_back(source);
+  networks.emplace_back(network(sources.size() - 1, color::r));
+  networkLookup.emplace_back(networks.size() - 1);
+  networks.back().referencesInLookup.emplace_back(networkLookup.size() - 1);
+  connector<color::r> r(networkLookup.size() - 1);
+
+  networks.emplace_back(network(sources.size() - 1, color::g));
+  networkLookup.emplace_back(networks.size() - 1);
+  networks.back().referencesInLookup.emplace_back(networkLookup.size() - 1);
+  connector<color::g> g(networkLookup.size() - 1);
+
+  return connector<color::rg>(r, g);
+}
+
+template<color r>
+wire<r> wire<r>::loop()
+{
+  return getConnector<r>(networkSource());
+}
+
+void operator <<=(wire<color::r> const& left, connector<color::r> const& right) { merge(left.source.source, right.source); }
+void operator <<=(wire<color::g> const& left, connector<color::g> const& right) { merge(left.source.source, right.source); }
+void operator <<=(wire<color::rg> const& left, connector<color::rg> const& right) { merge(left.r.source.source, right.r.source); merge(left.g.source.source, right.g.source); }
+
+template<color c>
+struct conCom
+{
+  std::shared_ptr<conComData> data;
+  explicit conCom(std::shared_ptr<conComData> const& other) : data(other) {}
+
+  operator connector<c>() { return getConnector<c>(*this->data); }
+  operator wire<c>() { return this->operator connector<c>(); }
+};
+template<>
+struct conCom<color::rg>
+{
+  std::shared_ptr<conComData> data;
+  conCom<color::r> r;
+  conCom<color::g> g;
+
+  explicit conCom(conComData const& data)
+    : data(std::make_shared<conComData>(data)), r(this->data), g(this->data) {}
+  conCom(std::optional<signal::WithValue> const& val0 = {},  std::optional<signal::WithValue> const& val1 = {},  std::optional<signal::WithValue> const& val2 = {}
+       , std::optional<signal::WithValue> const& val3 = {},  std::optional<signal::WithValue> const& val4 = {},  std::optional<signal::WithValue> const& val5 = {}
+       , std::optional<signal::WithValue> const& val6 = {},  std::optional<signal::WithValue> const& val7 = {},  std::optional<signal::WithValue> const& val8 = {}
+       , std::optional<signal::WithValue> const& val9 = {},  std::optional<signal::WithValue> const& val10 = {}, std::optional<signal::WithValue> const& val11 = {}
+       , std::optional<signal::WithValue> const& val12 = {}, std::optional<signal::WithValue> const& val13 = {}, std::optional<signal::WithValue> const& val14 = {}
+       , std::optional<signal::WithValue> const& val15 = {}, std::optional<signal::WithValue> const& val16 = {}, std::optional<signal::WithValue> const& val17 = {})
+    : data(std::make_shared<conComData>(conComData{ val0, val1, val2, val3, val4, val5, val6, val7, val8, val9, val10, val11, val12, val13, val14, val15, val16, val17 })), r(this->data), g(this->data) {}
+
+  operator connector<color::rg>() { return getConnector<color::rg>(*this->data); }
+  operator wire<color::rg>() { return this->operator connector<color::rg>(); }
+  conComData* operator->() { return data.operator->(); }
+};
+conCom(conComData)->conCom<color::rg>;
+conCom(std::initializer_list<signal::WithValue>)->conCom<color::rg>;
+conCom(...)->conCom<color::rg>;
+
+template <color c>
+wire(conCom<c>)->wire<c>;
+
+template<color c> connector<c> operator>>(wire<color::rg> const& p,      deciCom<c> const& d) { return getConnector<c>(networkSource(*d.data, p)); }
+template<color c> connector<c> operator> (wire<color::r> const& p,       deciCom<c> const& d) { return getConnector<c>(networkSource(*d.data, p)); }
+template<color c> connector<c> operator> (wire<color::g> const& p,       deciCom<c> const& d) { return getConnector<c>(networkSource(*d.data, p)); }
+template<color c> connector<c> operator> (connector<color::rg> const& p, deciCom<c> const& d)
+{
+  assert(networks[networkLookup[p.r.source]].sources == networks[networkLookup[p.g.source]].sources /* cannot pick one color arbitrarily if connectors aren't holding equal values! */);
+  return getConnector<c>(networkSource(*d.data, p.r));
+}
+
+template<color c> connector<c> operator>>(wire<color::rg> const& p,      ariCom<c> const& a) { return getConnector<c>(networkSource(*a.data, p)); }
+template<color c> connector<c> operator> (wire<color::r> const& r,       ariCom<c> const& a) { return getConnector<c>(networkSource(*a.data, r)); }
+template<color c> connector<c> operator> (wire<color::g> const& g,       ariCom<c> const& a) { return getConnector<c>(networkSource(*a.data, g)); }
+template<color c> connector<c> operator> (connector<color::rg> const& p, ariCom<c> const& a)
+{
+  assert(networks[networkLookup[p.r.source]].sources == networks[networkLookup[p.g.source]].sources /* cannot pick one color arbitrarily if connectors aren't holding equal values! */);
+  return getConnector<c>(networkSource(*a.data, p.r));
+}
+
+connector<color::r>  operator+=(connector<color::r> const& left,  connector<color::r> const& right)  { merge(left.source, right.source); return left; }
+connector<color::g>  operator+=(connector<color::g> const& left,  connector<color::g> const& right)  { merge(left.source, right.source); return left; }
+connector<color::rg> operator+=(connector<color::rg> const& left, connector<color::rg> const& right) { merge(left.r.source, right.r.source); merge(left.g.source, right.g.source); return left; }
+
+connector<color::rg> operator+=(connector<color::rg> const& left, connector<color::r> const& right)  { merge(left.r.source, right.source); return left; }
+connector<color::rg> operator+=(connector<color::r> const& left,  connector<color::rg> const& right) { merge(left.source, right.r.source); return right; }
+connector<color::rg> operator+=(connector<color::rg> const& left, connector<color::g> const& right)  { merge(left.g.source, right.source); return left; }
+connector<color::rg> operator+=(connector<color::g> const& left,  connector<color::rg> const& right) { merge(left.source, right.g.source); return right; }
+
+std::string toGameCode(const char* s)
+{
+  std::string result = s;
+  std::replace(result.begin(), result.end(), '_', '-');
+  return result;
+}
 
 
 namespace itemSignal
@@ -670,7 +995,7 @@ namespace itemSignal
     std::vector<signal> result;
     size_t i = 0;
 #define op(name) \
-    result.push_back(signal(new signal::Description(#name, #name, "item", i++)));
+    result.push_back(signal(new signal::Description(#name, toGameCode(#name), "item", i++)));
     operations
 #undef op
       return result; 
@@ -683,7 +1008,7 @@ namespace itemSignal
   };
 
 #define op(opName) \
-  signal const opName = itemSignals[int(itemSignalsEnum::##opName)];
+  signal const opName = itemSignals[size_t(itemSignalsEnum::##opName)];
   operations
 #undef op
 #undef operations
@@ -697,7 +1022,7 @@ namespace fluidSignal
     std::vector<signal> result;
     size_t i = 0;
 #define op(name) \
-    result.push_back(signal(new signal::Description(#name, #name, "fluid", i++)));
+    result.push_back(signal(new signal::Description(#name, toGameCode(#name), "fluid", i++)));
     operations
 #undef op
       return result;
@@ -710,7 +1035,7 @@ namespace fluidSignal
 #undef op
   };
 #define op(opName) \
-  signal const opName = fluidSignals[int(fluidSignalsEnum::##opName)];
+  signal const opName = fluidSignals[size_t(fluidSignalsEnum::##opName)];
   operations
 #undef op
 #undef operations
@@ -728,7 +1053,7 @@ namespace virtualSignal
     std::vector<signal> result;
     size_t i = 0;
 #define op(name, score) \
-    result.push_back(signal(new signal::Description(#score#name, "signal"#score#name, "virtual", i++)));
+    result.push_back(signal(new signal::Description(#score#name, "signal-"#name, "virtual", i++)));
     operations
 #undef op
     return result;
@@ -741,7 +1066,7 @@ namespace virtualSignal
 #undef op
   };
 #define op(opName, score) \
-  signal const score##opName  = virtualSignals[int(virtualSignalsEnum::##score##opName)];
+  signal const score##opName  = virtualSignals[size_t(virtualSignalsEnum::##score##opName)];
   operations
 #undef op
 #undef operations
@@ -756,12 +1081,11 @@ static constexpr auto is_valid(T)
   return std::is_invocable<T, Ts...>{};
 }
 
-#define assert1Invalid(var0, exp)       static_assert(!is_valid<decltype(var0)>                ([](auto var0)            constexpr -> decltype(void(exp)){}))
-#define assert2Invalid(var0, var1, exp) static_assert(!is_valid<decltype(var0), decltype(var1)>([](auto var0, auto var1) constexpr -> decltype(void(exp)){}))
-#define assert1Invalid11(var, expr1, expr2, expr3, expr4, expr5, expr6, expr7, expr8, expr9, expr10, expr11)        \
-    assert1Invalid(var, expr1); assert1Invalid(var, expr2); assert1Invalid(var, expr3); assert1Invalid(var, expr4); \
-    assert1Invalid(var, expr5); assert1Invalid(var, expr6); assert1Invalid(var, expr7); assert1Invalid(var, expr8); \
-    assert1Invalid(var, expr9); assert1Invalid(var, expr10); assert1Invalid(var, expr11)
+#define assertInvalid(var, exp)  static_assert(!is_valid<decltype(var)>([](auto temp) constexpr -> decltype(void(exp)){}))
+#define assertInvalid11(var, expr1, expr2, expr3, expr4, expr5, expr6, expr7, expr8, expr9, expr10, expr11)                                 \
+    assertInvalid(var, expr1); assertInvalid(var, expr2); assertInvalid(var, expr3); assertInvalid(var, expr4); assertInvalid(var, expr5);  \
+    assertInvalid(var, expr6); assertInvalid(var, expr7); assertInvalid(var, expr8); assertInvalid(var, expr9); assertInvalid(var, expr10); \
+    assertInvalid(var, expr11)
 
 #define assertType(type, expr) static_assert(std::is_same<type, decltype(expr)>::value)
 #define assertType2(type, expr1, expr2) assertType(type, expr1); assertType(type, expr2)
@@ -780,32 +1104,32 @@ namespace unit_tests
   void testFunction(wildCard card,
                     signal coal,
                     signal::Description sigDesc,
-                    deciCom deci,
-                    deciCom::Mode deciMode,
-                    deciCom::Mode::Description deciModeDesc,
-                    deciCom::Input deciIn,
-                    deciCom::Input::Left deciInLeft,
-                    deciCom::Input::Right deciInRight,
-                    deciCom::Input::AllType deciInAll,
-                    deciCom::Input::AnyType deciInAny,
-                    deciCom::Input::EachType deciInEach,
-                    deciCom::Input::SignalType deciInSig,
-                    deciCom::Input::SignalType::Boolable deciInSigBool,
-                    deciCom::Input::Boolable deciInBool,
-                    deciCom::Output deciOut,
-                    deciCom::Output::Type deciOutType,
-                    deciCom::Output::Value deciOutVal,
-                    deciCom::Output::AllType deciOutAll,
-                    deciCom::Output::EachType deciOutEach,
+                    deciComData deci,
+                    deciComData::Mode deciMode,
+                    deciComData::Mode::Description deciModeDesc,
+                    deciComData::Input deciIn,
+                    deciComData::Input::Left deciInLeft,
+                    deciComData::Input::Right deciInRight,
+                    deciComData::Input::AllType deciInAll,
+                    deciComData::Input::AnyType deciInAny,
+                    deciComData::Input::EachType deciInEach,
+                    deciComData::Input::SignalType deciInSig,
+                    deciComData::Input::SignalType::Boolable deciInSigBool,
+                    deciComData::Input::Boolable deciInBool,
+                    deciComData::Output deciOut,
+                    deciComData::Output::Type deciOutType,
+                    deciComData::Output::Value deciOutVal,
+                    deciComData::Output::AllType deciOutAll,
+                    deciComData::Output::EachType deciOutEach,
 
-                    ariCom ari,
-                    ariCom::Mode ariMode,
-                    ariCom::Mode::Description ariModeDesc,
-                    ariCom::Input ariIn,
-                    ariCom::Input::Left ariInLeft,
-                    ariCom::Input::Right ariInRight,
-                    ariCom::Input::IntSignalType ariInNonEach,
-                    ariCom::Output ariOut)
+                    ariComData ari,
+                    ariComData::Mode ariMode,
+                    ariComData::Mode::Description ariModeDesc,
+                    ariComData::Input ariIn,
+                    ariComData::Input::Left ariInLeft,
+                    ariComData::Input::Right ariInRight,
+                    ariComData::Input::IntSignalType ariInNonEach,
+                    ariComData::Output ariOut)
   {
     // deciCom::Output::Type
     assertType2(bool, input == input, input != input);
@@ -822,16 +1146,16 @@ namespace unit_tests
     assertType2(bool, each == any, each != any);
     assertType2(bool, each == all, each != all);
 
-    assertType6(deciCom::Input::AnyType,  any  == 0, any  != 0, any  < 0, any  <= 0, any  > 0, any  >= 0);
-    assertType6(deciCom::Input::AllType,  all  == 0, all  != 0, all  < 0, all  <= 0, all  > 0, all  >= 0);
-    assertType6(deciCom::Input::EachType, each == 0, each != 0, each < 0, each <= 0, each > 0, each >= 0);
+    assertType6(deciComData::Input::AnyType,  any  == 0, any  != 0, any  < 0, any  <= 0, any  > 0, any  >= 0);
+    assertType6(deciComData::Input::AllType,  all  == 0, all  != 0, all  < 0, all  <= 0, all  > 0, all  >= 0);
+    assertType6(deciComData::Input::EachType, each == 0, each != 0, each < 0, each <= 0, each > 0, each >= 0);
 
-    assertType2(deciCom::Output::AllType,  all  += 1, all  += input);
-    assertType2(deciCom::Output::EachType, each += 1, each += input);
+    assertType2(deciComData::Output::AllType,  all  += 1, all  += input);
+    assertType2(deciComData::Output::EachType, each += 1, each += input);
 
-    assert1Invalid11(any,       any  + 0, any  - 0, any  * 0, any  / 0, any  % 0, any  ^ 0, any  >> 0, any  << 0, any  AND 0, any  OR 0, any  XOR 0);
-    assert1Invalid11(all,       all  + 0, all  - 0, all  * 0, all  / 0, all  % 0, all  ^ 0, all  >> 0, all  << 0, all  AND 0, all  OR 0, all  XOR 0);
-    assertType11(ariCom::Input, each + 0, each - 0, each * 0, each / 0, each % 0, each ^ 0, each >> 0, each << 0, each AND 0, each OR 0, each XOR 0);
+    assertInvalid11(any, temp + 0, temp - 0, temp * 0, temp / 0, temp % 0, temp ^ 0, temp >> 0, temp << 0, temp AND 0, temp OR 0, temp XOR 0);
+    assertInvalid11(all, temp + 0, temp - 0, temp * 0, temp / 0, temp % 0, temp ^ 0, temp >> 0, temp << 0, temp AND 0, temp OR 0, temp XOR 0);
+    assertType11(ariComData::Input, each + 0, each - 0, each * 0, each / 0, each % 0, each ^ 0, each >> 0, each << 0, each AND 0, each OR 0, each XOR 0);
 
     // wildCard
     assertType2(bool, card == card, card != card);
@@ -839,19 +1163,19 @@ namespace unit_tests
     assertType4(bool, card == all,  card != all,  all == card,  all != card);
     assertType4(bool, card == each, card != each, each == card, each != card);
 
-    assertType11(ariCom::Input, card + 0, card - 0, card * 0, card / 0, card % 0, card ^ 0, card >> 0, card << 0, card AND 0, card OR 0, card XOR 0);
+    assertType11(ariComData::Input, card + 0, card - 0, card * 0, card / 0, card % 0, card ^ 0, card >> 0, card << 0, card AND 0, card OR 0, card XOR 0);
 
     // signal
-    assert2Types2(bool, deciCom::Input::SignalType, coal == coal, coal != coal);
-    assertType4(deciCom::Input::SignalType,                       coal < coal, coal <= coal, coal > coal, coal >= coal);
-    assertType6(deciCom::Input::SignalType, coal == 0, coal != 0, coal < 0,    coal <= 0,    coal > 0,    coal >= 0);
+    assert2Types2(bool, deciComData::Input::SignalType, coal == coal, coal != coal);
+    assertType4(deciComData::Input::SignalType,                       coal < coal, coal <= coal, coal > coal, coal >= coal);
+    assertType6(deciComData::Input::SignalType, coal == 0, coal != 0, coal < 0,    coal <= 0,    coal > 0,    coal >= 0);
 
-    assertType2(deciCom::Output, coal += 0, coal += input);
-    
-    assert1Invalid11(any,       any  + coal, any  - coal, any  * coal, any  / coal, any  % coal, any  ^ coal, any  >> coal, any  << coal, any  AND coal, any  OR coal, any  XOR coal);
-    assert1Invalid11(all,       all  + coal, all  - coal, all  * coal, all  / coal, all  % coal, all  ^ coal, all  >> coal, all  << coal, all  AND coal, all  OR coal, all  XOR coal);
-    assertType11(ariCom::Input, each + coal, each - coal, each * coal, each / coal, each % coal, each ^ coal, each >> coal, each << coal, each AND coal, each OR coal, each XOR coal);
-    assertType11(ariCom::Input, card + coal, card - coal, card * coal, card / coal, card % coal, card ^ coal, card >> coal, card << coal, card AND coal, card OR coal, card XOR coal);
+    assertType2(deciComData::Output, coal += 0, coal += input);
+
+    assertInvalid11(any, temp + coal, temp - coal, temp * coal, temp / coal, temp % coal, temp ^ coal, temp >> coal, temp << coal, temp AND coal, temp OR coal, temp XOR coal);
+    assertInvalid11(all, temp + coal, temp - coal, temp * coal, temp / coal, temp % coal, temp ^ coal, temp >> coal, temp << coal, temp AND coal, temp OR coal, temp XOR coal);
+    assertType11(ariComData::Input, each + coal, each - coal, each * coal, each / coal, each % coal, each ^ coal, each >> coal, each << coal, each AND coal, each OR coal, each XOR coal);
+    assertType11(ariComData::Input, card + coal, card - coal, card * coal, card / coal, card % coal, card ^ coal, card >> coal, card << coal, card AND coal, card OR coal, card XOR coal);
 
     // signalDescription
     assertType2(bool, sigDesc == sigDesc, sigDesc != sigDesc);
@@ -868,9 +1192,9 @@ namespace unit_tests
 
     //deciCom::Input::Left;
     assertType2(bool, deciInLeft == deciInLeft, deciInLeft != deciInLeft);
-    assert2Types2(bool, deciCom::Input, deciInLeft == coal, deciInLeft != coal);
-    assertType4(deciCom::Input,                                   deciInLeft < coal, deciInLeft <= coal, deciInLeft > coal, deciInLeft >= coal);
-    assertType6(deciCom::Input, deciInLeft == 0, deciInLeft != 0, deciInLeft < 0,    deciInLeft <= 0,    deciInLeft > 0,    deciInLeft >= 0);
+    assert2Types2(bool, deciComData::Input, deciInLeft == coal, deciInLeft != coal);
+    assertType4(deciComData::Input,                                   deciInLeft < coal, deciInLeft <= coal, deciInLeft > coal, deciInLeft >= coal);
+    assertType6(deciComData::Input, deciInLeft == 0, deciInLeft != 0, deciInLeft < 0,    deciInLeft <= 0,    deciInLeft > 0,    deciInLeft >= 0);
     assertType4(bool, deciInLeft == any,  deciInLeft != any,  any  == deciInLeft, any  != deciInLeft);
     assertType4(bool, deciInLeft == all,  deciInLeft != all,  all  == deciInLeft, all  != deciInLeft);
     assertType4(bool, deciInLeft == each, deciInLeft != each, each == deciInLeft, each != deciInLeft);
@@ -878,13 +1202,13 @@ namespace unit_tests
 
     //deciCom::Input::Right;
     assertType2(bool, deciInRight == deciInRight, deciInRight != deciInRight);
-    assert2Types2(bool, deciCom::Input::SignalType, coal == deciInRight, coal != deciInRight);
-    assertType4(deciCom::Input::SignalType,                                         coal < deciInRight, coal <= deciInRight, coal > deciInRight, coal >= deciInRight);
-    assertType6(deciCom::Input::AnyType,  any  == deciInRight, any  != deciInRight, any  < deciInRight, any  <= deciInRight, any  > deciInRight, any >= deciInRight);
-    assertType6(deciCom::Input::AllType,  all  == deciInRight, all  != deciInRight, all  < deciInRight, all  <= deciInRight, all  > deciInRight, all >= deciInRight);
-    assertType6(deciCom::Input::EachType, each == deciInRight, each != deciInRight, each < deciInRight, each <= deciInRight, each > deciInRight, each >= deciInRight);
-    assert2Types2(bool, deciCom::Input, deciInLeft == deciInRight, deciInLeft != deciInRight);
-    assertType4(deciCom::Input, deciInLeft < deciInRight, deciInLeft <= deciInRight, deciInLeft > deciInRight, deciInLeft >= deciInRight);
+    assert2Types2(bool, deciComData::Input::SignalType, coal == deciInRight, coal != deciInRight);
+    assertType4(deciComData::Input::SignalType,                                         coal < deciInRight, coal <= deciInRight, coal > deciInRight, coal >= deciInRight);
+    assertType6(deciComData::Input::AnyType,  any  == deciInRight, any  != deciInRight, any  < deciInRight, any  <= deciInRight, any  > deciInRight, any >= deciInRight);
+    assertType6(deciComData::Input::AllType,  all  == deciInRight, all  != deciInRight, all  < deciInRight, all  <= deciInRight, all  > deciInRight, all >= deciInRight);
+    assertType6(deciComData::Input::EachType, each == deciInRight, each != deciInRight, each < deciInRight, each <= deciInRight, each > deciInRight, each >= deciInRight);
+    assert2Types2(bool, deciComData::Input, deciInLeft == deciInRight, deciInLeft != deciInRight);
+    assertType4(deciComData::Input, deciInLeft < deciInRight, deciInLeft <= deciInRight, deciInLeft > deciInRight, deciInLeft >= deciInRight);
 
     //deciCom::Input::AnyType;
     assertType2(bool, deciInAny == deciInAny, deciInAny != deciInAny);
@@ -906,41 +1230,41 @@ namespace unit_tests
 
     //deciCom::Output;
     assertType2(bool, deciOut == deciOut, deciOut != deciOut);
-    assertType(deciCom, deciIn then deciOut);
-    assertType6(deciCom, deciInAll then deciOut, deciInAny then deciOut, deciInEach then deciOut, 
-                         deciInSig then deciOut, deciInSigBool then deciOut, deciInBool then deciOut);
+    assertType(deciCom<color::rg>, deciIn then deciOut);
+    assertType6(deciCom<color::rg>, deciInAll then deciOut, deciInAny then deciOut, deciInEach then deciOut,
+                                    deciInSig then deciOut, deciInSigBool then deciOut, deciInBool then deciOut);
 
     //deciCom::Output::Value;
     assertType2(bool, deciOutVal == deciOutVal, deciOutVal != deciOutVal);
     assertType2(bool, deciOutVal == 0, 0 != deciOutVal);
     assertType2(bool, deciOutVal == input, input != deciOutVal);
-    assertType(deciCom::Output::EachType, each += deciOutVal);
-    assertType(deciCom::Output::AllType, all += deciOutVal);
-    assertType(deciCom::Output, coal += deciOutVal);
+    assertType(deciComData::Output::EachType, each += deciOutVal);
+    assertType(deciComData::Output::AllType, all += deciOutVal);
+    assertType(deciComData::Output, coal += deciOutVal);
 
     //deciCom::Output::Type;
     assertType2(bool, deciOutType == deciOutType, deciOutType != deciOutType);
-    assertType2(deciCom::Output, deciOutType += 0, deciOutType += input);
-    assertType(deciCom::Output, deciOutType += deciOutVal);
+    assertType2(deciComData::Output, deciOutType += 0, deciOutType += input);
+    assertType(deciComData::Output, deciOutType += deciOutVal);
 
     //deciCom::Output::AllType;
     assertType2(bool, deciOutAll == deciOutAll, deciOutAll != deciOutAll);
     assertType2(bool, deciOutAll == deciOut,    deciOut != deciOutAll);
-    assertType(deciCom, deciIn then deciOutAll);
-    assertType5(deciCom, deciInAll then deciOutAll, deciInAny then deciOutAll, /*deciInEach then deciOutAll,*/
-                         deciInSig then deciOutAll, deciInSigBool then deciOutAll, deciInBool then deciOutAll);
-    assert2Invalid(deciInEach, deciOutAll, deciInEach then deciOutAll);
+    assertType(deciCom<color::rg>, deciIn then deciOutAll);
+    assertType5(deciCom<color::rg>, deciInAll then deciOutAll, deciInAny then deciOutAll, /*deciInEach then deciOutAll,*/
+                                    deciInSig then deciOutAll, deciInSigBool then deciOutAll, deciInBool then deciOutAll);
+    assertInvalid(deciInEach, temp then deciOutAll);
 
     //deciCom::Output::EachType;
     assertType2(bool, deciOutEach == deciOutEach, deciOutEach != deciOutEach);
     assertType2(bool, deciOutEach == deciOut,    deciOutEach != deciOutEach);
-    assertType(deciCom, deciIn then deciOutEach);
-    assertType2(deciCom, /*deciInAll then deciOutEach, deciInAny then deciOutEach,*/ deciInEach then deciOutEach,
-                         /*deciInSig then deciOutEach, deciInSigBool then deciOutEach,*/ deciInBool then deciOutEach);
-    assert2Invalid(deciInAll, deciOutEach, deciInAll then deciOutEach);
-    assert2Invalid(deciInAny, deciOutEach, deciInAny then deciOutEach);
-    assert2Invalid(deciInSig, deciOutEach, deciInSig then deciOutEach);
-    assert2Invalid(deciInSigBool, deciOutEach, deciInSigBool then deciOutEach);
+    assertType(deciCom<color::rg>, deciIn then deciOutEach);
+    assertType2(deciCom<color::rg>, /*deciInAll then deciOutEach, deciInAny then deciOutEach,*/ deciInEach then deciOutEach,
+                                    /*deciInSig then deciOutEach, deciInSigBool then deciOutEach,*/ deciInBool then deciOutEach);
+    assertInvalid(deciInAll, temp then deciOutEach);
+    assertInvalid(deciInAny, temp then deciOutEach);
+    assertInvalid(deciInSig, temp then deciOutEach);
+    assertInvalid(deciInSigBool, temp then deciOutEach);
 
     //ariCom;
     assertType2(bool, ari == ari, ari != ari);
@@ -951,8 +1275,7 @@ namespace unit_tests
 
     //ariCom::Input;
     assertType2(bool, ariIn == ariIn, ariIn != ariIn);
-    assertType2(ariCom, ariIn on each, ariIn on coal);
-
+    assertType2(ariCom<color::rg>, ariIn on each, ariIn on coal);
     //ariCom::Input::Left;
     assertType2(bool, ariInLeft == ariInLeft, ariInLeft != ariInLeft);
     assertType4(bool, ariInLeft == 0,    ariInLeft != 0,    0    == ariInLeft, 0    != ariInLeft);
@@ -960,10 +1283,10 @@ namespace unit_tests
     assertType4(bool, ariInLeft == each, ariInLeft != each, each == ariInLeft, each != ariInLeft);
     assertType4(bool, ariInLeft == card, ariInLeft != card, card == ariInLeft, card != ariInLeft);
 
-    assertType11(ariCom::Input, ariInLeft + 0,     ariInLeft - 0,     ariInLeft * 0,      ariInLeft / 0,     ariInLeft % 0,    ariInLeft ^ 0,
-                                ariInLeft >> 0,    ariInLeft << 0,    ariInLeft AND 0,    ariInLeft OR 0,    ariInLeft XOR 0);
-    assertType11(ariCom::Input, ariInLeft + coal,  ariInLeft - coal,  ariInLeft * coal,   ariInLeft / coal,  ariInLeft % coal, ariInLeft ^ coal,
-                                ariInLeft >> coal, ariInLeft << coal, ariInLeft AND coal, ariInLeft OR coal, ariInLeft XOR coal);
+    assertType11(ariComData::Input, ariInLeft + 0,     ariInLeft - 0,     ariInLeft * 0,      ariInLeft / 0,     ariInLeft % 0,    ariInLeft ^ 0,
+                                    ariInLeft >> 0,    ariInLeft << 0,    ariInLeft AND 0,    ariInLeft OR 0,    ariInLeft XOR 0);
+    assertType11(ariComData::Input, ariInLeft + coal,  ariInLeft - coal,  ariInLeft * coal,   ariInLeft / coal,  ariInLeft % coal, ariInLeft ^ coal,
+                                    ariInLeft >> coal, ariInLeft << coal, ariInLeft AND coal, ariInLeft OR coal, ariInLeft XOR coal);
 
     //ariCom::Input::Right;
     assertType2(bool, ariInRight == ariInRight, ariInRight != ariInRight);
@@ -971,23 +1294,23 @@ namespace unit_tests
     assertType2(bool, ariInRight == coal, ariInRight != coal);
     static_assert(std::is_convertible_v<decltype(coal == ariInRight), bool>);
     static_assert(std::is_convertible_v<decltype(coal != ariInRight), bool>);
-    assert1Invalid11(any,       any  +  ariInRight, any  -  ariInRight, any   *  ariInRight, any  /  ariInRight, any   %  ariInRight, any  ^ ariInRight,
-                                any  >> ariInRight, any  << ariInRight, any  AND ariInRight, any  OR ariInRight, any  XOR ariInRight);
-    assert1Invalid11(all,       all  +  ariInRight, all  -  ariInRight, all   *  ariInRight, all  /  ariInRight, all   %  ariInRight, all  ^ ariInRight, 
-                                all  >> ariInRight, all  << ariInRight, all  AND ariInRight, all  OR ariInRight, all  XOR ariInRight);
-    assertType11(ariCom::Input, each +  ariInRight, each -  ariInRight, each  *  ariInRight, each /  ariInRight, each  %  ariInRight, each ^ ariInRight, 
-                                each >> ariInRight, each << ariInRight, each AND ariInRight, each OR ariInRight, each XOR ariInRight);
-    assertType11(ariCom::Input, card +  ariInRight, card -  ariInRight, card  *  ariInRight, card /  ariInRight, card  %  ariInRight, card ^ ariInRight, 
-                                card >> ariInRight, card << ariInRight, card AND ariInRight, card OR ariInRight, card XOR ariInRight);
-    assertType11(ariCom::Input, ariInLeft +  ariInRight, ariInLeft -  ariInRight, ariInLeft  *  ariInRight, ariInLeft /  ariInRight, ariInLeft  %  ariInRight, ariInLeft ^ ariInRight,
-                                ariInLeft >> ariInRight, ariInLeft << ariInRight, ariInLeft AND ariInRight, ariInLeft OR ariInRight, ariInLeft XOR ariInRight);
+    assertInvalid11(any, temp +  ariInRight, temp -  ariInRight, temp  *  ariInRight, temp /  ariInRight, temp  %  ariInRight, temp ^ ariInRight,
+                         temp >> ariInRight, temp << ariInRight, temp AND ariInRight, temp OR ariInRight, temp XOR ariInRight);
+    assertInvalid11(all, temp +  ariInRight, temp -  ariInRight, temp  *  ariInRight, temp /  ariInRight, temp  %  ariInRight, temp ^ ariInRight, 
+                         temp >> ariInRight, temp << ariInRight, temp AND ariInRight, temp OR ariInRight, temp XOR ariInRight);
+    assertType11(ariComData::Input, each +  ariInRight, each -  ariInRight, each  *  ariInRight, each /  ariInRight, each  %  ariInRight, each ^ ariInRight, 
+                                    each >> ariInRight, each << ariInRight, each AND ariInRight, each OR ariInRight, each XOR ariInRight);
+    assertType11(ariComData::Input, card +  ariInRight, card -  ariInRight, card  *  ariInRight, card /  ariInRight, card  %  ariInRight, card ^ ariInRight, 
+                                    card >> ariInRight, card << ariInRight, card AND ariInRight, card OR ariInRight, card XOR ariInRight);
+    assertType11(ariComData::Input, ariInLeft +  ariInRight, ariInLeft -  ariInRight, ariInLeft  *  ariInRight, ariInLeft /  ariInRight, ariInLeft  %  ariInRight, ariInLeft ^ ariInRight,
+                                    ariInLeft >> ariInRight, ariInLeft << ariInRight, ariInLeft AND ariInRight, ariInLeft OR ariInRight, ariInLeft XOR ariInRight);
 
     //ariCom::Input::IntSignalType;
     assertType2(bool, ariInNonEach == ariInNonEach, ariInNonEach != ariInNonEach);
     assertType4(bool, ariInNonEach == ariIn, ariInNonEach != ariIn, ariIn == ariInNonEach, ariIn != ariInNonEach);
 
-    assertType(ariCom, ariInNonEach on coal);
-    assert2Invalid(ariInNonEach, each, ariInNonEach on each);
+    assertType(ariCom<color::rg>, ariInNonEach on coal);
+    //assertInvalid(ariInNonEach on each);
 
     //ariCom::Output;
     assertType2(bool, ariOut == ariOut, ariOut != ariOut);
@@ -995,27 +1318,331 @@ namespace unit_tests
     assertType4(bool, ariOut == each, ariOut != each, each == ariOut, each != ariOut);
     assertType4(bool, ariOut == card, ariOut != card, card == ariOut, card != ariOut);
 
-    assertType2(ariCom, ariIn on ariOut, ariIn on ariOut);
-    assertType2(ariCom, ariInNonEach on ariOut, ariInNonEach on ariOut);
+    assertType2(ariCom<color::rg>, ariIn on ariOut, ariIn on ariOut);
+    assertType2(ariCom<color::rg>, ariInNonEach on ariOut, ariInNonEach on ariOut);
 
     // left = deciInLeft, any, all, each, card, coal
     // right = deciInRight, coal, 0
-    assertType3(deciCom::Input,             deciInLeft <deciMode> deciInRight, deciInLeft <deciMode> coal, deciInLeft <deciMode> 0);
-    assertType3(deciCom::Input::AnyType,    any        <deciMode> deciInRight, any        <deciMode> coal, any        <deciMode> 0);
-    assertType3(deciCom::Input::AllType,    all        <deciMode> deciInRight, all        <deciMode> coal, all        <deciMode> 0);
-    assertType3(deciCom::Input::EachType,   each       <deciMode> deciInRight, each       <deciMode> coal, each       <deciMode> 0);
-    assertType3(deciCom::Input,             card       <deciMode> deciInRight, card       <deciMode> coal, card       <deciMode> 0);
-    assertType3(deciCom::Input::SignalType, coal       <deciMode> deciInRight, coal       <deciMode> coal, coal       <deciMode> 0);
+    assertType3(deciComData::Input,             deciInLeft <deciMode> deciInRight, deciInLeft <deciMode> coal, deciInLeft <deciMode> 0);
+    assertType3(deciComData::Input::AnyType,    any        <deciMode> deciInRight, any        <deciMode> coal, any        <deciMode> 0);
+    assertType3(deciComData::Input::AllType,    all        <deciMode> deciInRight, all        <deciMode> coal, all        <deciMode> 0);
+    assertType3(deciComData::Input::EachType,   each       <deciMode> deciInRight, each       <deciMode> coal, each       <deciMode> 0);
+    assertType3(deciComData::Input,             card       <deciMode> deciInRight, card       <deciMode> coal, card       <deciMode> 0);
+    assertType3(deciComData::Input::SignalType, coal       <deciMode> deciInRight, coal       <deciMode> coal, coal       <deciMode> 0);
 
 
     // left = ariInLeft, 0, each, card, coal
     // right = ariInRight, coal, 0
-    assertType3(ariCom::Input,                ariInLeft <ariMode> ariInRight, ariInLeft <ariMode> coal, ariInLeft <ariMode> 0);
-    assertType3(ariCom::Input::IntSignalType, 0         <ariMode> ariInRight, 0         <ariMode> coal, 0         <ariMode> 0);
-    assertType3(ariCom::Input,                each      <ariMode> ariInRight, each      <ariMode> coal, each      <ariMode> 0);
-    assertType3(ariCom::Input,                card      <ariMode> ariInRight, card      <ariMode> coal, card      <ariMode> 0);
-    assertType3(ariCom::Input::IntSignalType, coal      <ariMode> ariInRight, coal      <ariMode> coal, coal      <ariMode> 0);
+    assertType3(ariComData::Input,                ariInLeft <ariMode> ariInRight, ariInLeft <ariMode> coal, ariInLeft <ariMode> 0);
+    assertType3(ariComData::Input::IntSignalType, 0         <ariMode> ariInRight, 0         <ariMode> coal, 0         <ariMode> 0);
+    assertType3(ariComData::Input,                each      <ariMode> ariInRight, each      <ariMode> coal, each      <ariMode> 0);
+    assertType3(ariComData::Input,                card      <ariMode> ariInRight, card      <ariMode> coal, card      <ariMode> 0);
+    assertType3(ariComData::Input::IntSignalType, coal      <ariMode> ariInRight, coal      <ariMode> coal, coal      <ariMode> 0);
   }
 }
 
 #endif
+
+struct Entity {
+  size_t networkSourceIndex = -1;
+  size_t entity_number = -1;
+  //std::string name; - decide based on networkSourceIndex
+  std::tuple<float, float> position;
+  uint32_t direction = 0; // not written if 0
+  std::vector<std::tuple<size_t, int32_t>> rConnections; // second is only written for ari/deci, first is index into entites vector
+  std::vector<std::tuple<size_t, int32_t>> gConnections; // second is only written for ari/deci, first is index into entites vector
+  std::optional<std::vector<std::tuple<size_t, int32_t>>> r2Connections;
+  std::optional<std::vector<std::tuple<size_t, int32_t>>> g2Connections;
+
+  std::vector<std::tuple<size_t, int32_t>>& operator()(color c, int i = 1)
+  {
+    if (c == color::r)
+      return i == 1 ? rConnections : r2Connections.value();
+    else
+      return i == 1 ? gConnections : g2Connections.value();
+  }
+};
+
+std::string stringify(std::vector<Entity>& ents)
+{
+  std::ostringstream output;
+  output << "{\"blueprint\":{\"icons\":[{\"signal\":{\"type\":\"item\",\"name\":\"decider-combinator\"},\"index\":1}],\"entities\":[";
+  for (size_t i = 0; i < ents.size(); i++)
+  {
+    Entity& e = ents[i];
+    output << "{\"entity_number\":" << (i + 1) << ",\"position\":{\"x\":" << std::get<0>(e.position) << ",\"y\":" << std::get<1>(e.position) << "},";
+    if (e.direction != 0)
+      output << "\"direction\":" << e.direction << ",";
+    output << "\"name\":\"";
+    if (e.networkSourceIndex == -1)
+      output << "medium-electric-pole\",";
+    else
+      std::visit(overload(
+        [&output](conComData const& c) -> void {
+          output << "constant-combinator\",\"control_behavior\":{\"filters\":[";
+          bool first = true;
+          for (size_t j = 0; j < c.size(); j++)
+            if (c[j].has_value())
+            {
+              if (!first) output << ","; else first = false;
+              output << "{";
+              c[j].value().toString(output);
+              output << ",\"index\":" << (j + 1) << "}";
+            }
+          output << "]},";
+        },
+        [&output](deciComData const& d) -> void {
+          output << "decider-combinator\",\"control_behavior\":{\"decider_conditions\":{\"first_signal\":{";
+          std::visit(overload(
+            [&output](auto const& s) { s.toString(output); } // templates to all, each, any & signal
+          ), d.left);
+          output << "},";
+          std::visit(overload(
+            [&output](int32_t const& i) { output << "\"constant\":" << i; },
+            [&output](signal const& s) { output << "\"second_signal\":{"; s.toString(output); output << "}"; }
+          ), d.right);
+          output << ",\"comparator\":\"" << d.mode.description->gameSyntax << "\",\"output_signal\":{";
+          std::visit(overload(
+            [&output](auto const& s) { s.toString(output); } // templates to all, each & signal
+          ), d.output);
+          output << "},\"copy_count_from_input\":";
+          output << (d.value.has_value() ? "false}}," : "true}},");
+        },
+          [&output](ariComData const& a) -> void {
+          output << "arithmetic-combinator\",\"control_behavior\":{\"arithmetic_conditions\":{";
+          std::visit(overload(
+            [&output](int32_t const& i) { output << "\"first_constant\":" << i << ","; },
+            [&output](auto const& s) { output << "\"first_signal\":{"; s.toString(output); output << "},"; } // templates to each & signal
+          ), a.left);
+          std::visit(overload(
+            [&output](int32_t const& i) { output << "\"second_constant\":" << i << ","; },
+            [&output](signal const& s) { output << "\"second_signal\":{"; s.toString(output); output << "},"; }
+          ), a.right);
+          output << "\"operation\":\"" << a.mode.description->gameSyntax << "\",\"output_signal\":{";
+          std::visit(overload(
+            [&output](auto const& s) { s.toString(output); output << "}}},"; } // templates to each & signal
+          ), a.output.value);
+        }
+        ), sources[e.networkSourceIndex].combinator.value());
+    output << "\"connections\":{\"1\":{";
+    if (e.rConnections.size() != 0)
+    {
+      output << "\"red\":[";
+      for (size_t j = 0; j < e.rConnections.size(); j++)
+      {
+        const auto [first, second] = e.rConnections[j];
+        output << "{\"entity_id\":" << first;
+        if (second != 0)
+          output << ",\"circuit_id\":" << second;
+        output << "}";
+        if (j != e.rConnections.size() - 1)
+          output << ",";
+      }
+      output << "]";
+    }
+    if (e.gConnections.size() != 0)
+    {
+      if (e.rConnections.size() != 0)
+        output << ",";
+      output << "\"green\":[";
+      for (size_t j = 0; j < e.gConnections.size(); j++)
+      {
+        const auto [first, second] = e.gConnections[j];
+        output << "{\"entity_id\":" << first;
+        if (second != 0)
+          output << ",\"circuit_id\":" << second;
+        output << "}";
+        if (j != e.gConnections.size() - 1)
+          output << ",";
+      }
+      output << "]";
+    }
+    if (!e.r2Connections.has_value())
+      output << "}";
+    else
+    {
+      output << "},\"2\": {";
+      if (e.r2Connections.value().size() != 0)
+      {
+        output << "\"red\":[";
+        for (size_t j = 0; j < e.r2Connections.value().size(); j++)
+        {
+          const auto [first, second] = e.r2Connections.value()[j];
+          output << "{\"entity_id\":" << first;
+          if (second != 0)
+            output << ",\"circuit_id\":" << second;
+          output << "}";
+          if (j != e.r2Connections.value().size() - 1)
+            output << ",";
+        }
+        output << "]";
+      }
+      if (e.g2Connections.value().size() != 0)
+      {
+        if (e.g2Connections.value().size() != 0)
+          output << ",";
+        output << "\"green\":[";
+        for (size_t j = 0; j < e.g2Connections.value().size(); j++)
+        {
+          const auto [first, second] = e.g2Connections.value()[j];
+          output << "{\"entity_id\":" << first;
+          if (second != 0)
+            output << ",\"circuit_id\":" << second;
+          output << "}";
+          if (j != e.g2Connections.value().size() - 1)
+            output << ",";
+        }
+        output << "]";
+      }
+      output << "}";
+    }
+    if (i != ents.size() - 1)
+      output << "}},";
+    else
+      output << "}}";
+  }
+  output << "],\"item\":\"blueprint\",\"version\":73018245120}}";
+  return output.str();
+}
+size_t poleAt(uint64_t const& x, uint64_t const& y, std::vector<Entity>& entities, std::vector<std::vector<size_t>>& xyToPole)
+{
+  size_t result;
+  if (xyToPole.size() > x && xyToPole[x].size() > y && (result = xyToPole[x][y]) != -1)
+    return result;
+  else
+  {
+    entities.emplace_back(Entity());
+    Entity& pole = entities.back();
+    pole.position = std::make_tuple(x, y);
+    pole.entity_number = entities.size() - 1;
+    uint64_t maxX = std::max<uint64_t>(xyToPole.size(), x);
+    uint64_t maxY = xyToPole.size() == 0 ? y : std::max<uint64_t>(xyToPole[0].size(), y);
+    for (size_t px = 0; px <= maxX; px++)
+    {
+      if (xyToPole.size() <= maxX)
+        xyToPole.emplace_back(std::vector<size_t>());
+      for (size_t py = xyToPole[px].size(); py <= maxY; py++)
+        xyToPole[px].emplace_back(-1);
+    }
+    return xyToPole[x][y] = pole.entity_number;
+  }
+}
+void connectToPoleAt(uint64_t const& x, uint64_t const& y, color const& c, int const& connection, size_t const& e, std::vector<Entity>& entities, std::vector<std::vector<size_t>>& xyToPole)
+{
+  uint64_t y0 = std::min<int64_t>(y, connection == 1 ? 8 : 9);
+  size_t pole = poleAt(x, y0, entities, xyToPole);
+  entities[e](c, connection).push_back(std::make_tuple(pole + 1, 0));
+  entities[pole](c).push_back(std::make_tuple(e + 1, connection));
+  size_t lastPole = pole;
+  if (y0 < y)
+  {
+    for (y0 = y0 + 9; y0 < y; y0 += 9)
+    {
+      pole = poleAt(x, y0, entities, xyToPole);
+      entities[lastPole](c).push_back(std::make_tuple(pole + 1, 0));
+      entities[pole](c).push_back(std::make_tuple(lastPole + 1, 0));
+      lastPole = pole;
+    }
+    pole = poleAt(x, y, entities, xyToPole);
+    entities[lastPole](c).push_back(std::make_tuple(pole + 1, 0));
+    entities[pole](c).push_back(std::make_tuple(lastPole + 1, 0));
+  }
+}
+
+std::string compile()
+{
+  std::vector<Entity> entities;
+  std::vector<size_t> sourceToEntityMapping;
+  for (size_t i = 0; i < sources.size(); i++)
+    if (sources[i].combinator.has_value())
+    {
+      Entity next;
+      next.networkSourceIndex = i;
+      next.entity_number = entities.size();
+      sourceToEntityMapping.push_back(next.entity_number);
+      std::visit(overload(
+        [&next](conComData const&) -> void { next.position = std::make_tuple(next.entity_number, 1); },
+        [&next](auto const&) -> void
+        {
+          next.position = std::make_tuple(next.entity_number, 0.5f);
+          next.r2Connections = std::vector<std::tuple<size_t, int32_t>>();
+          next.g2Connections = std::vector<std::tuple<size_t, int32_t>>();
+        }
+      ), sources[i].combinator.value());
+      next.direction = 4; // this makes it less likely for wires to visually cross
+      entities.emplace_back(next);
+    }
+    else
+      sourceToEntityMapping.push_back(-1);
+  std::vector<uint64_t> networkToY;
+  int redNetworks = 0;
+  int greenNetworks = 0;
+  for (size_t i = 0; i < networks.size(); i++)
+  {
+    int raw = (networks[i].c == color::r ? redNetworks : greenNetworks)++;
+    networkToY.push_back(((int64_t)raw - 1) / 7 * 9 + ((int64_t)raw - 1) % 7 + 3);
+  }
+  std::vector<std::vector<size_t>> xyToPole;
+  for (size_t i = 0; i < networks.size(); i++)
+  {
+    for (size_t j = 0; j < networks[i].sources.size(); j++)
+    {
+      size_t e = sourceToEntityMapping[networks[i].sources[j]];
+      bool constComb = !sources[entities[e].networkSourceIndex].combinatorInput.has_value();
+      uint64_t x = sourceToEntityMapping[networks[i].sources[j]];
+      uint64_t y = networkToY[i];
+      connectToPoleAt(x, y, networks[i].c, constComb ? 1 : 2, e, entities, xyToPole);
+      if (!constComb)
+      {
+        size_t sr, sg;
+        std::tie(sr, sg) = std::visit(overload(
+          [](wire<color::r> const& r) { return std::make_tuple(r.source.source, SIZE_MAX); },
+          [](wire<color::g> const& g) { return std::make_tuple(SIZE_MAX, g.source.source); },
+          [](wire<color::rg> const& rg) { return std::make_tuple(rg.r.source.source, rg.g.source.source); }),
+          sources[networks[i].sources[j]].combinatorInput.value());
+        if (sr != -1)
+        {
+          assert(networks[networkLookup[sr]].c == color::r);
+          y = networkToY[networkLookup[sr]];
+          connectToPoleAt(x, y, color::r, 1, e, entities, xyToPole);
+        }
+        if (sg != -1)
+        {
+          assert(networks[networkLookup[sg]].c == color::g);
+          y = networkToY[networkLookup[sg]];
+          connectToPoleAt(x, y, color::g, 1, e, entities, xyToPole);
+        }
+      }
+    }
+  }
+  for (size_t i = 0; i < networks.size(); i++)
+  {
+    uint64_t y = networkToY[i];
+    size_t current = -1;
+    color c = networks[i].c;
+    for (size_t x = 0; x < xyToPole.size(); x++)
+      if (xyToPole[x][y] != -1 && entities[xyToPole[x][y]](c).size() != 0)
+      {
+        current = x;
+        break;
+      }
+    assert(current != -1);
+    for (size_t x = current + 1; x < xyToPole.size(); x++)
+      if (xyToPole[x][y] != -1 && entities[xyToPole[x][y]](c).size() != 0)
+      {
+        for (size_t tx = current + 9; tx < x; tx += 9)
+        {
+          size_t pole = poleAt(tx, y, entities, xyToPole);
+          entities[xyToPole[current][y]](networks[i].c).push_back(std::make_tuple(xyToPole[tx][y] + 1, 0));
+          entities[xyToPole[tx][y]](networks[i].c).push_back(std::make_tuple(xyToPole[current][y] + 1, 0));
+          current = tx;
+        }
+        entities[xyToPole[current][y]](networks[i].c).push_back(std::make_tuple(xyToPole[x][y] + 1, 0));
+        entities[xyToPole[x][y]](networks[i].c).push_back(std::make_tuple(xyToPole[current][y] + 1, 0));
+        current = x;
+      }
+  }
+
+
+  return stringify(entities);
+}
