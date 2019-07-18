@@ -947,6 +947,8 @@ conCom(...)->conCom<color::rg>;
 
 template <color c>
 wire(conCom<c>)->wire<c>;
+template <color c>
+connector(conCom<c>)->connector<c>;
 
 template<color c> connector<c> operator>>(wire<color::rg> const& p,      deciCom<c> const& d) { return getConnector<c>(networkSource(*d.data, p)); }
 template<color c> connector<c> operator> (wire<color::r> const& p,       deciCom<c> const& d) { return getConnector<c>(networkSource(*d.data, p)); }
