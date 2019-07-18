@@ -868,9 +868,9 @@ connector<c> getConnector(networkSource&& source)
 {
   if (source.combinatorInput.has_value())
     std::visit(overload(
-      [](wire<color::r> const& r) { return r->targets.push_back(sources.size()); },
-      [](wire<color::g> const& g) { return g->targets.push_back(sources.size()); },
-      [](wire<color::rg> const& rg) { return rg.r->targets.push_back(sources.size()); rg.g->targets.push_back(sources.size()); }),
+      [](wire<color::r> const& r) { r->targets.push_back(sources.size()); },
+      [](wire<color::g> const& g) { g->targets.push_back(sources.size()); },
+      [](wire<color::rg> const& rg) { rg.r->targets.push_back(sources.size()); rg.g->targets.push_back(sources.size()); }),
       source.combinatorInput.value());
   sources.emplace_back(source);
   networks.emplace_back(network(sources.size() - 1, c));
@@ -883,9 +883,9 @@ connector<color::rg> getConnector(networkSource&& source)
 {
   if (source.combinatorInput.has_value())
     std::visit(overload(
-      [](wire<color::r> const& r) { return r->targets.push_back(sources.size()); },
-      [](wire<color::g> const& g) { return g->targets.push_back(sources.size()); },
-      [](wire<color::rg> const& rg) { return rg.r->targets.push_back(sources.size()); rg.g->targets.push_back(sources.size()); }),
+      [](wire<color::r> const& r) { r->targets.push_back(sources.size()); },
+      [](wire<color::g> const& g) { g->targets.push_back(sources.size()); },
+      [](wire<color::rg> const& rg) { rg.r->targets.push_back(sources.size()); rg.g->targets.push_back(sources.size()); }),
       source.combinatorInput.value());
   sources.emplace_back(source);
   networks.emplace_back(network(sources.size() - 1, color::r));
@@ -1743,7 +1743,7 @@ std::string compile()
     }
   std::vector<std::vector<size_t>> xyToPole;
 
-  uint64_t outputPostX = xyToPole.size() + 2;
+  uint64_t outputPostX = entities.size() + 2;
   for (compiledNetwork& n : cNetworks)
   {
     size_t xLastPole = -1; size_t iLastPole = -1;
