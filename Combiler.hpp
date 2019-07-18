@@ -26,6 +26,8 @@ enum class color
   rg
 };
 
+struct network;
+
 template <color c>
 struct connector
 {
@@ -34,6 +36,7 @@ struct connector
 
   bool operator==(connector const& o) const;
   bool operator!=(connector const& o) const;
+  network* operator->() const;
 };
 template<>
 struct connector<color::rg>
@@ -56,6 +59,7 @@ struct wire
 
   bool operator==(wire const& o) const { return this->source == o.source; }
   bool operator!=(wire const& o) const { return this->source != o.source; }
+  network* operator->() const { return this->source.operator->(); }
 };
 template<>
 struct wire<color::rg>
@@ -782,6 +786,7 @@ struct network
 {
   std::vector<size_t> sources;
   std::vector<size_t> referencesInLookup; // contains i if and only if this == networks[networkLookup[i]]
+  std::vector<size_t> targets;
   color c;
   bool canStillMerge = true;
   uint8_t flags = 0;
@@ -801,12 +806,15 @@ struct network
 std::vector<networkSource> sources;
 std::vector<network> networks;
 std::vector<size_t> networkLookup;
+template<color c>
+network* connector<c>::operator->() const { return &networks[networkLookup[this->source]]; }
 
 template<color c>
-wire<c>::wire(connector<c> const& s) : source(s) { networks[networkLookup[this->source.source]].canStillMerge = false; }
+wire<c>::wire(connector<c> const& s) : source(s) { this->source->canStillMerge = false; }
 template<color c>
 bool connector<c>::operator==(connector<c> const& o) const { return networkLookup[this->source] == networkLookup[o.source]; }
 // ^^ these won't specialize for wire|connector<color::rg>, since the complete struct was specialized
+
 
 void merge(size_t left, size_t right)
 {
@@ -820,6 +828,7 @@ void merge(size_t left, size_t right)
   {
     // merge connectors ln and rn
     assert(ln.canStillMerge && rn.canStillMerge /* cannot merge connectors after converting them to wires! */);
+    assert(ln.targets.size() == 0 && rn.targets.size() == 0 /* invalid state. Connector-type networks can't have targets! */);
     size_t lnEnd = ln.sources.size();
     ln.sources.insert(ln.sources.end(), std::make_move_iterator(rn.sources.begin()), std::make_move_iterator(rn.sources.end()));
     for (auto ref : rn.referencesInLookup)
@@ -838,6 +847,8 @@ void merge(size_t left, size_t right)
     // merge connector rn into loop wire ln
     assert(ln.referencesInLookup.size() == 1 && ln.sources.size() == 1); // are you maybe trying to merge a second connector into the looped wire?
     assert(!sources[ln.sources[0]].combinator.has_value() && !sources[ln.sources[0]].combinatorInput.has_value());
+    assert(rn.targets.size() == 0 /* invalid state. Connector-type networks can't have targets! */);
+    rn.targets = std::move(ln.targets);
     networkLookup[ln.referencesInLookup[0]] = lRight;
     rn.referencesInLookup.push_back(ln.referencesInLookup[0]);
     rn.canStillMerge = false;
@@ -855,6 +866,12 @@ void merge(size_t left, size_t right)
 template<color c>
 connector<c> getConnector(networkSource&& source)
 {
+  if (source.combinatorInput.has_value())
+    std::visit(overload(
+      [](wire<color::r> const& r) { return r->targets.push_back(sources.size()); },
+      [](wire<color::g> const& g) { return g->targets.push_back(sources.size()); },
+      [](wire<color::rg> const& rg) { return rg.r->targets.push_back(sources.size()); rg.g->targets.push_back(sources.size()); }),
+      source.combinatorInput.value());
   sources.emplace_back(source);
   networks.emplace_back(network(sources.size() - 1, c));
   networkLookup.emplace_back(networks.size() - 1);
@@ -864,6 +881,12 @@ connector<c> getConnector(networkSource&& source)
 template<>
 connector<color::rg> getConnector(networkSource&& source)
 {
+  if (source.combinatorInput.has_value())
+    std::visit(overload(
+      [](wire<color::r> const& r) { return r->targets.push_back(sources.size()); },
+      [](wire<color::g> const& g) { return g->targets.push_back(sources.size()); },
+      [](wire<color::rg> const& rg) { return rg.r->targets.push_back(sources.size()); rg.g->targets.push_back(sources.size()); }),
+      source.combinatorInput.value());
   sources.emplace_back(source);
   networks.emplace_back(network(sources.size() - 1, color::r));
   networkLookup.emplace_back(networks.size() - 1);
@@ -930,7 +953,7 @@ template<color c> connector<c> operator> (wire<color::r> const& p,       deciCom
 template<color c> connector<c> operator> (wire<color::g> const& p,       deciCom<c> const& d) { return getConnector<c>(networkSource(*d.data, p)); }
 template<color c> connector<c> operator> (connector<color::rg> const& p, deciCom<c> const& d)
 {
-  assert(networks[networkLookup[p.r.source]].sources == networks[networkLookup[p.g.source]].sources /* cannot pick one color arbitrarily if connectors aren't holding equal values! */);
+  assert(p.r->sources == p.g->sources /* cannot pick one color arbitrarily if connectors aren't holding equal values! */);
   return getConnector<c>(networkSource(*d.data, p.r));
 }
 
@@ -939,7 +962,7 @@ template<color c> connector<c> operator> (wire<color::r> const& r,       ariCom<
 template<color c> connector<c> operator> (wire<color::g> const& g,       ariCom<c> const& a) { return getConnector<c>(networkSource(*a.data, g)); }
 template<color c> connector<c> operator> (connector<color::rg> const& p, ariCom<c> const& a)
 {
-  assert(networks[networkLookup[p.r.source]].sources == networks[networkLookup[p.g.source]].sources /* cannot pick one color arbitrarily if connectors aren't holding equal values! */);
+  assert(p.r->sources == p.g->sources /* cannot pick one color arbitrarily if connectors aren't holding equal values! */);
   return getConnector<c>(networkSource(*a.data, p.r));
 }
 
@@ -1359,12 +1382,12 @@ struct Entity {
   std::optional<std::vector<std::tuple<size_t, int32_t>>> r2Connections;
   std::optional<std::vector<std::tuple<size_t, int32_t>>> g2Connections;
 
-  std::vector<std::tuple<size_t, int32_t>>& operator()(color c, int i = 1)
+  std::vector<std::tuple<size_t, int32_t>>& operator()(color c, int i = 0)
   {
     if (c == color::r)
-      return i == 1 ? rConnections : r2Connections.value();
+      return i != 2 ? rConnections : r2Connections.value();
     else
-      return i == 1 ? gConnections : g2Connections.value();
+      return i != 2 ? gConnections : g2Connections.value();
   }
 };
 
@@ -1578,10 +1601,12 @@ size_t poleAt(uint64_t const& x, uint64_t const& y, std::vector<Entity>& entitie
   {
     entities.emplace_back(Entity());
     Entity& pole = entities.back();
-    pole.position = std::make_tuple(x, y);
+    pole.position = { x, y };
     pole.entity_number = entities.size() - 1;
-    uint64_t maxX = std::max<uint64_t>(xyToPole.size(), x);
-    uint64_t maxY = xyToPole.size() == 0 ? y : std::max<uint64_t>(xyToPole[0].size(), y);
+    uint64_t maxX = std::max<uint64_t>(xyToPole.size(), x + 1); 
+    if (maxX > 0) maxX--;
+    uint64_t maxY = xyToPole.size() == 0 ? y + 1 : std::max<uint64_t>(xyToPole[0].size(), y + 1);
+    if (maxY > 0) maxY--;
     for (size_t px = 0; px <= maxX; px++)
     {
       if (xyToPole.size() <= maxX)
@@ -1590,27 +1615,6 @@ size_t poleAt(uint64_t const& x, uint64_t const& y, std::vector<Entity>& entitie
         xyToPole[px].emplace_back(-1);
     }
     return xyToPole[x][y] = pole.entity_number;
-  }
-}
-void connectToPoleAt(uint64_t const& x, uint64_t const& y, color const& c, int const& connection, size_t const& e, std::vector<Entity>& entities, std::vector<std::vector<size_t>>& xyToPole)
-{
-  uint64_t y0 = std::min<int64_t>(y, connection == 1 ? 8 : 9);
-  size_t pole = poleAt(x, y0, entities, xyToPole);
-  entities[e](c, connection).push_back(std::make_tuple(pole + 1, 0));
-  entities[pole](c).push_back(std::make_tuple(e + 1, connection));
-  size_t lastPole = pole;
-  if (y0 < y)
-  {
-    for (y0 = y0 + 9; y0 < y; y0 += 9)
-    {
-      pole = poleAt(x, y0, entities, xyToPole);
-      entities[lastPole](c).push_back(std::make_tuple(pole + 1, 0));
-      entities[pole](c).push_back(std::make_tuple(lastPole + 1, 0));
-      lastPole = pole;
-    }
-    pole = poleAt(x, y, entities, xyToPole);
-    entities[lastPole](c).push_back(std::make_tuple(pole + 1, 0));
-    entities[pole](c).push_back(std::make_tuple(lastPole + 1, 0));
   }
 }
 
@@ -1645,7 +1649,7 @@ std::string compile()
   std::vector<Entity> entities;
   std::vector<size_t> sourceToEntityMapping;
   for (size_t i = 0; i < networks.size(); i++)
-    //if (networks[i].flags & 1)
+    if (networks[i].flags & 1)
       flagSourcesForOutput(i);
   for (size_t i = 0; i < sources.size(); i++)
     if (sources[i].combinator.has_value() && (sources[i].flags & 2))
@@ -1655,112 +1659,138 @@ std::string compile()
       next.entity_number = entities.size();
       sourceToEntityMapping.push_back(next.entity_number);
       std::visit(overload(
-        [&next](conComData const&) -> void { next.position = std::make_tuple(next.entity_number, 1); },
-        [&next](auto const&) -> void
+        [&next](conComData const&) { next.position = { next.entity_number, 1 }; },
+        [&next](auto const&)
         {
-          next.position = std::make_tuple(next.entity_number, 0.5f);
+          next.position = { next.entity_number, 0.5f };
           next.r2Connections = std::vector<std::tuple<size_t, int32_t>>();
           next.g2Connections = std::vector<std::tuple<size_t, int32_t>>();
         }
       ), sources[i].combinator.value());
-      next.direction = 4; // this makes it less likely for wires to visually cross
       entities.emplace_back(next);
     }
     else
       sourceToEntityMapping.push_back(-1);
-  std::vector<uint64_t> networkToY;
-  int redNetworks = 0;
-  int greenNetworks = 0;
-  for (size_t i = 0; i < networks.size(); i++)
+  struct connection
   {
-    if (networks[i].flags & 2) 
+    size_t entity = -1;
+    int32_t index = -1;
+    uint8_t wires = 0;
+    bool operator<(connection const& r)
     {
-      int raw = (networks[i].c == color::r ? redNetworks : greenNetworks)++;
-      networkToY.push_back(((int64_t)raw - 1) / 7 * 9 + ((int64_t)raw - 1) % 7 + 3);
+      if (this->entity < r.entity)
+        return true;
+      else if (this->entity > r.entity)
+        return false;
+      else
+        return this->index < r.index;
     }
-    else
-      networkToY.push_back(0);
-  }
-  std::vector<std::vector<size_t>> xyToPole;
-  for (size_t i = 0; i < networks.size(); i++)
+  };
+  struct compiledNetwork
   {
+    color c;
+    uint8_t flags = 0;
+    uint64_t y = 0;
+    std::vector<connection> connections; // maps into entities via first, bool true = input, false = output
+  };
+  std::vector<compiledNetwork> cNetworks;
+  for (size_t i = 0; i < networks.size(); i++)
     if (networks[i].flags & 2)
+    {
+      compiledNetwork next;
       for (size_t j = 0; j < networks[i].sources.size(); j++)
+        if (sourceToEntityMapping[networks[i].sources[j]] != -1)
+          next.connections.push_back({ sourceToEntityMapping[networks[i].sources[j]], sources[networks[i].sources[j]].combinatorInput.has_value() ? 2 : 0 });
+      for (size_t j = 0; j < networks[i].targets.size(); j++)
+        if (sourceToEntityMapping[networks[i].targets[j]] != -1)
+          next.connections.push_back({ sourceToEntityMapping[networks[i].targets[j]], 1 });
+      std::sort(next.connections.begin(), next.connections.end());
+      next.c = networks[i].c;
+      next.flags = networks[i].flags;
+      cNetworks.emplace_back(next);
+    }
+  for (compiledNetwork& n :cNetworks)
+  {
+    color c = n.c;
+    for (size_t j = 1; j < n.connections.size(); j++)
+    {
+      connection& l = n.connections[j - 1];
+      connection& r = n.connections[j];
+      if (std::abs(static_cast<int64_t>(l.entity - r.entity)) <= 10)
       {
-        size_t e = sourceToEntityMapping[networks[i].sources[j]];
-        bool constComb = !sources[entities[e].networkSourceIndex].combinatorInput.has_value();
-        uint64_t x = sourceToEntityMapping[networks[i].sources[j]];
-        uint64_t y = networkToY[i];
-        connectToPoleAt(x, y, networks[i].c, constComb ? 1 : 2, e, entities, xyToPole);
-        if (!constComb)
+        entities[l.entity](c, l.index).push_back({ r.entity + 1, r.index });
+        entities[r.entity](c, r.index).push_back({ l.entity + 1, l.index });
+      }
+      else
+      {
+        n.flags |= 4;
+        l.wires++;
+        r.wires++;
+      }
+    }
+    if (n.flags & 1)
+      n.connections.back().wires++;
+  }
+  int64_t redNetworks = 0;
+  int64_t greenNetworks = 0;
+  for (compiledNetwork& n : cNetworks)
+    if (n.flags & 5) 
+    {
+      int64_t raw = (n.c == color::r ? redNetworks : greenNetworks)++ * 5;
+      n.y = (raw - 1) / 7 * 9 + (raw - 1) % 7 + 3;
+    }
+  std::vector<std::vector<size_t>> xyToPole;
+
+  uint64_t outputPostX = xyToPole.size() + 2;
+  for (compiledNetwork& n : cNetworks)
+  {
+    size_t xLastPole = -1; size_t iLastPole = -1;
+    for (connection con : n.connections)
+      if (con.wires != 0)
+      {
+        uint64_t x = con.entity;
+        uint64_t y0 = std::min<int64_t>(n.y, con.index == 1 ? 8 : 9);
+        size_t pole = poleAt(x, y0, entities, xyToPole);
+        entities[con.entity](n.c, con.index).push_back({ pole + 1, 0 });
+        entities[pole](n.c).push_back({ con.entity + 1, con.index });
+        size_t lastPole = pole;
+        if (y0 < n.y)
+          for (y0 = std::min(y0 + 9, n.y); y0 <= n.y; y0 += 9)
+          {
+            pole = poleAt(x, y0, entities, xyToPole);
+            entities[lastPole](n.c).push_back({ pole + 1, 0 });
+            entities[pole](n.c).push_back({ lastPole + 1, 0 });
+            lastPole = pole;
+          }
+        if (xLastPole == -1)
         {
-          size_t sr, sg;
-          std::tie(sr, sg) = std::visit(overload(
-            [](wire<color::r> const& r) { return std::make_tuple(r.source.source, SIZE_MAX); },
-            [](wire<color::g> const& g) { return std::make_tuple(SIZE_MAX, g.source.source); },
-            [](wire<color::rg> const& rg) { return std::make_tuple(rg.r.source.source, rg.g.source.source); }),
-            sources[networks[i].sources[j]].combinatorInput.value());
-          if (sr != -1)
+          xLastPole = x;
+          iLastPole = lastPole;
+        }
+        else
+        {
+          while((xLastPole = std::max(xLastPole + 1, std::min(xLastPole + 9, x))) <= x)
           {
-            assert(networks[networkLookup[sr]].c == color::r);
-            if (networkLookup[sr] == i)
-            {
-              entities[e](color::r, 1).push_back(std::make_tuple(e + 1, 2));
-              entities[e](color::r, 2).push_back(std::make_tuple(e + 1, 1));
-            }
-            else
-            {
-              y = networkToY[networkLookup[sr]];
-              connectToPoleAt(x, y, color::r, 1, e, entities, xyToPole);
-            }
+            size_t pole = poleAt(xLastPole, n.y, entities, xyToPole);
+            entities[iLastPole](n.c).push_back({ pole + 1, 0 });
+            entities[pole](n.c).push_back({ iLastPole + 1, 0 });
+            iLastPole = pole;
           }
-          if (sg != -1)
-          {
-            assert(networks[networkLookup[sg]].c == color::g);
-            if (networkLookup[sg] == i)
-            {
-              entities[e](color::g, 1).push_back(std::make_tuple(e + 1, 2));
-              entities[e](color::g, 2).push_back(std::make_tuple(e + 1, 1));
-            }
-            else
-            {
-              y = networkToY[networkLookup[sg]];
-              connectToPoleAt(x, y, color::g, 1, e, entities, xyToPole);
-            }
-          }
+          if (con.wires == 1)
+            xLastPole = iLastPole = -1;
         }
       }
-  }
-  for (size_t i = 0; i < networks.size(); i++)
-  {
-    if (networks[i].flags & 2)
-    {
-      uint64_t y = networkToY[i];
-      size_t current = -1;
-      color c = networks[i].c;
-      for (size_t x = 0; x < xyToPole.size(); x++)
-        if (xyToPole[x][y] != -1 && entities[xyToPole[x][y]](c).size() != 0)
-        {
-          current = x;
-          break;
-        }
-      assert(current != -1);
-      for (size_t x = current + 1; x < xyToPole.size(); x++)
-        if (xyToPole[x][y] != -1 && entities[xyToPole[x][y]](c).size() != 0)
-        {
-          for (size_t tx = current + 9; tx < x; tx += 9)
-          {
-            size_t pole = poleAt(tx, y, entities, xyToPole);
-            entities[xyToPole[current][y]](networks[i].c).push_back(std::make_tuple(xyToPole[tx][y] + 1, 0));
-            entities[xyToPole[tx][y]](networks[i].c).push_back(std::make_tuple(xyToPole[current][y] + 1, 0));
-            current = tx;
-          }
-          entities[xyToPole[current][y]](networks[i].c).push_back(std::make_tuple(xyToPole[x][y] + 1, 0));
-          entities[xyToPole[x][y]](networks[i].c).push_back(std::make_tuple(xyToPole[current][y] + 1, 0));
-          current = x;
-        }
-    }
+    if (n.flags & 1)
+      while ((xLastPole = std::max(xLastPole + 1, std::min(xLastPole + 9, outputPostX))) <= outputPostX)
+      {
+        size_t pole = poleAt(xLastPole, n.y, entities, xyToPole);
+        entities[iLastPole](n.c).push_back({ pole + 1, 0 });
+        entities[pole](n.c).push_back({ iLastPole + 1, 0 });
+        iLastPole = pole;
+      }
   }
 
+  for (size_t i = 0; i < networks.size(); i++)
+    networks[i].flags &= 0xFF ^ 2;
   return stringify(entities);
 }
